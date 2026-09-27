@@ -7,14 +7,17 @@ its own databases.
 """
 
 import os
+from datetime import datetime
 
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, MetaData, event
 from sqlalchemy import create_engine as sa_create_engine
 from sqlalchemy.engine.interfaces import DBAPIConnection
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.pool import ConnectionPoolEntry
+
+from opensumma.utc import UtcDateTime, utcnow
 
 DATABASE_URL_ENV = "OPENSUMMA_DATABASE_URL"
 DEFAULT_DATABASE_URL = "sqlite:///opensumma.db"
@@ -34,6 +37,15 @@ class Base(DeclarativeBase):
     """Declarative base for all persistence models."""
 
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
+
+
+class TimestampMixin:
+    """When a row was written and last changed, in UTC."""
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, default=utcnow, onupdate=utcnow
+    )
 
 
 def get_database_url() -> str:
