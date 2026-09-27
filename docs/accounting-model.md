@@ -1,7 +1,7 @@
 # Accounting Model
 
-**Status:** Phase 1 is implemented; later phases are still specification. Each
-section names the phase that implements it.
+**Status:** Phases 1 and 2 are implemented; later phases are still specification.
+Each section names the phase that implements it.
 
 ## Invariants
 
@@ -46,6 +46,10 @@ Implemented in `opensumma.money`.
   any non-`Decimal` value, and NaN or infinity. An entry validated as balanced is
   therefore exactly the entry recorded. Silent rounding on write could turn a validated,
   balanced entry into an unbalanced one.
+- `ensure_money()` is the single definition of an acceptable amount, shared by the
+  `Money` column and by the kernel's journal input: an exact `Decimal` in whole cents
+  that fits a 64-bit column. The kernel rejects anything else instead of rounding it,
+  so rounding is always an explicit decision by the caller.
 - Migrations record `Money` columns as `sa.BigInteger()` and don't import application
   code.
 
@@ -84,8 +88,9 @@ Implemented in `opensumma.kernel.accounts` and `opensumma.kernel.models`.
   whole subtree reports under one type.
 - **Only leaf accounts are postable; a parent exists to aggregate the accounts below
   it.** Adding a child to a postable account turns it into an aggregate, which is how a
-  chart is built from the top down. From Phase 2 on, an account that already carries
-  postings must not be allowed to gain children.
+  chart is built from the top down. An account that already has posted lines cannot
+  gain children (`AccountHasPostingsError`); see
+  [Accounts with postings](#accounts-with-postings).
 - An account is active only if all of its ancestors are active. Deactivating an account
   deactivates everything below it. Reactivating one requires an active parent and leaves
   its descendants retired, because they may have been retired individually beforehand.
@@ -128,6 +133,8 @@ Implemented in `opensumma.kernel.dimensions`.
 
 ## Journal entries (Phase 2)
 
+Implemented in `opensumma.kernel.journal` and `opensumma.kernel.models`.
+
 | Status | Meaning |
 | --- | --- |
 | DRAFT | Being prepared; not yet submitted |
@@ -138,9 +145,99 @@ Implemented in `opensumma.kernel.dimensions`.
 | REVERSED | Posted, then offset by a reversing entry; both stay in the ledger |
 | VOIDED | Abandoned before posting; never affected the ledger |
 
-- A reversal is a new journal entry with debits and credits swapped, linked to the
-  original. The original's lines remain in the ledger.
-- Posting an entry that is already posted is rejected.
+The kernel moves entries between DRAFT, POSTED, REVERSED, and VOIDED. PROPOSED,
+PENDING_APPROVAL, and APPROVED belong to the workflow engine (Phase 5); the kernel
+treats them like DRAFT. The kernel posts from any status that is not yet final, and
+deciding *who* may post and *from which status* is left to the workflow engine, which
+wraps the kernel rather than changing it.
+
+An entry has an accounting date, a required description, and numbered lines. A line
+names one account, carries a debit or a credit, an optional memo, and at most one value
+per dimension. Its period is not stored: the accounting date determines it.
+
+### Two tiers of rules
+
+**Recording** (`create_journal_entry`) rejects what cannot be stored at all. The
+database enforces the line shape too, so a direct write cannot store it either.
+
+| Code | Rule |
+| --- | --- |
+| MISSING_DESCRIPTION | Every entry says what it records |
+| TEXT_TOO_LONG | Descriptions and memos fit their columns (500 characters) |
+| INVALID_AMOUNT | Amounts are `Decimal`, finite, whole cents, and fit 64 bits; never rounded |
+| NEGATIVE_AMOUNT | Amounts are not negative |
+| DEBIT_AND_CREDIT | A line is a debit or a credit, never both |
+| ZERO_AMOUNT | A line's amount is strictly positive |
+| UNKNOWN_ACCOUNT | The account exists |
+| UNKNOWN_DIMENSION | The dimension exists |
+| UNKNOWN_DIMENSION_VALUE | The value exists within that dimension |
+
+**Posting** (`validate_journal_entry`, `post_journal_entry`) rejects what cannot enter
+the ledger. A draft may break these rules, because it may still be incomplete and
+master data may change before it is posted, so they are checked at the moment of
+posting.
+
+| Code | Rule |
+| --- | --- |
+| TOO_FEW_LINES | At least two lines |
+| UNBALANCED | Total debits equal total credits, in exact `Decimal` arithmetic |
+| NO_PERIOD | An accounting period contains the entry's date |
+| PERIOD_CLOSED | That period is open |
+| ACCOUNT_NOT_POSTABLE | Every account is a leaf, not an aggregate |
+| ACCOUNT_INACTIVE | Every account is active |
+| DIMENSION_VALUE_INACTIVE | Every dimension value is active |
+
+Both tiers report every problem at once, as `ValidationIssue` values with a stable
+code, a message, and the line number where one applies, in a deterministic order:
+entry-level issues first, then by line. Callers and benchmarks compare codes rather
+than parse messages, and a proposal can be corrected in a single pass.
+
+Posting an entry that is already in the ledger raises `AlreadyPostedError`; posting a
+voided one raises `EntryStatusError`. Neither is a content problem, so neither is an
+issue code.
+
+### Immutability
+
+A POSTED, REVERSED, or VOIDED entry is final. Its only permitted change is POSTED to
+REVERSED, which happens when a reversal is posted. Everything else is refused with
+`ImmutableEntryError`: editing the entry, adding, removing, moving, or editing its
+lines, changing their dimension values, and deleting any of them.
+
+This is enforced below the services, on every SQLAlchemy session:
+
+- Before each flush, a hook compares every changed journal object against the status
+  its entry has *in the database*. Attribute history is not enough: once a commit has
+  expired an object, SQLAlchemy no longer knows an attribute's previous value.
+- The same hook refuses to let any entry enter the ledger with fewer than two lines or
+  unbalanced, even one written directly through the ORM without the posting service.
+  The double-entry rule therefore holds for every path into the ledger, not only the
+  intended one.
+- Bulk INSERT, UPDATE, and DELETE statements on journal tables are refused, because
+  they would bypass the flush hook.
+
+Raw SQL on a database connection is beyond these hooks. Agents never receive SQL
+access, so that is the boundary; database triggers could close it, and Phase 3 may add
+them if the immutable ledger needs a stronger guarantee.
+
+### Reversal
+
+- A reversal is a new journal entry with every line's debit and credit swapped, keeping
+  the accounts, memos, and dimension values, linked to the original by `reversal_of`.
+  The original becomes REVERSED; both stay in the ledger and net to nothing.
+- The reversal's accounting date is required, not defaulted: the original's period may
+  be closed, and choosing "today" would make results depend on when code runs.
+- The reversal is validated like any other entry. If it is not valid, for example
+  because its date falls in a closed period, nothing changes at all.
+- An entry is reversed at most once, which a unique constraint also enforces. A
+  reversal is itself a posted entry and can be reversed, which reinstates the original.
+- A posted entry is corrected by reversing it and posting a new entry. It is never
+  voided: voiding is only for entries that never reached the ledger.
+
+### Accounts with postings
+
+An account that already has posted lines cannot gain child accounts, because that
+would turn an account holding ledger history into an aggregate that may hold none.
+Draft lines do not count; such a draft simply fails validation later.
 
 ## Accounting Objects (Phase 4)
 
@@ -161,6 +258,9 @@ ledger only through journal entries, which go through normal validation.
 | Zero-amount lines | Not allowed; each line has exactly one strictly positive side |
 | Posting to parent accounts | Only leaf accounts are postable; parents aggregate |
 | Timestamps | UTC only, timezone-aware; accounting dates are plain dates |
+| Rounding at the kernel | Never; sub-cent amounts are rejected, callers round explicitly |
+| Correcting a posted entry | Reverse it and post a new one; never edit or void it |
+| Reversal date | Required from the caller; never defaulted |
 
 ## Open design decisions
 
@@ -172,5 +272,9 @@ These should be settled before or during the phase named.
 2. **Sequential period close (Phase 5).** Closing a period does not require earlier
    periods to be closed, and reopening is unrestricted. Both belong with the workflow
    engine and its permissions rather than with the kernel.
-3. **Required dimensions (Phase 2).** Whether a dimension may be mandatory, globally or
-   per account, is deferred until journal lines exist to carry them.
+3. **Required dimensions (Phase 3 or later).** Whether a dimension may be mandatory,
+   globally or per account, is still open. Lines can carry dimensions now, but no
+   report depends on them yet, so there is no evidence for which rule is right.
+4. **Database-enforced immutability (Phase 3).** Recorded entries are protected by
+   session hooks, which raw SQL can bypass. Triggers would close that gap, but they are
+   written differently for SQLite and PostgreSQL.

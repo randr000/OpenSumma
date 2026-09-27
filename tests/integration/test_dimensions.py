@@ -7,6 +7,7 @@ from opensumma.kernel.dimensions import (
     create_dimension,
     dimensions,
     get_dimension,
+    get_dimension_value,
     resolve_dimension_value,
 )
 from opensumma.kernel.errors import (
@@ -112,3 +113,14 @@ def test_the_database_rejects_a_duplicate_value_code_in_one_dimension(
 
     with pytest.raises(IntegrityError):
         session.flush()
+
+
+def test_a_retired_value_can_still_be_looked_up(
+    session: Session, department: Dimension
+) -> None:
+    """Existing lines keep referring to retired values, so lookup must find them."""
+    resolve_dimension_value(session, "DEPARTMENT", "SALES").is_active = False
+
+    assert get_dimension_value(session, "DEPARTMENT", "SALES").name == "Sales"
+    with pytest.raises(UnknownDimensionValueError):
+        get_dimension_value(session, "DEPARTMENT", "LEGAL")

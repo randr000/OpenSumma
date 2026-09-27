@@ -1,11 +1,13 @@
 """The accounting kernel: deterministic accounting master data and rules.
 
-Phase 1 covers the chart of accounts, accounting periods, and dimensions.
-Journal entries, posting, and the immutable ledger arrive in Phases 2 and 3.
+Phase 1 covers the chart of accounts, accounting periods, and dimensions. Phase 2
+adds journal entries: recording, validation, posting, voiding, and reversal. The
+immutable ledger and financial reports arrive in Phase 3.
 
 The kernel is usable directly from Python and depends on nothing above it. Every
 name a caller needs is re-exported here, so importing this package is also what
-registers the persistence models on ``Base.metadata``.
+registers the persistence models on ``Base.metadata`` and the session hooks that
+protect recorded journal entries.
 """
 
 from opensumma.kernel.accounts import (
@@ -17,6 +19,7 @@ from opensumma.kernel.accounts import (
     descendants,
     find_account,
     get_account,
+    has_postings,
     postable_accounts,
 )
 from opensumma.kernel.dimensions import (
@@ -25,25 +28,56 @@ from opensumma.kernel.dimensions import (
     dimensions,
     find_dimension,
     get_dimension,
+    get_dimension_value,
     resolve_dimension_value,
 )
-from opensumma.kernel.enums import AccountType, NormalBalance, PeriodStatus
+from opensumma.kernel.enums import (
+    AccountType,
+    IssueCode,
+    JournalEntryStatus,
+    NormalBalance,
+    PeriodStatus,
+)
 from opensumma.kernel.errors import (
+    AccountHasPostingsError,
     AccountTypeMismatchError,
+    AlreadyPostedError,
     ClosedPeriodError,
     DuplicateCodeError,
+    EntryStatusError,
+    ImmutableEntryError,
     InactiveAccountError,
     InactiveDimensionValueError,
     InvalidPeriodRangeError,
+    JournalEntryError,
     KernelError,
     NotPostableError,
     OverlappingPeriodError,
     UnknownAccountError,
     UnknownDimensionError,
     UnknownDimensionValueError,
+    UnknownJournalEntryError,
     UnknownPeriodError,
+    ValidationIssue,
 )
-from opensumma.kernel.models import Account, AccountingPeriod, Dimension, DimensionValue
+from opensumma.kernel.journal import (
+    LineInput,
+    create_journal_entry,
+    get_journal_entry,
+    post_journal_entry,
+    reverse_journal_entry,
+    validate_journal_entry,
+    void_journal_entry,
+)
+from opensumma.kernel.models import (
+    Account,
+    AccountingPeriod,
+    Dimension,
+    DimensionValue,
+    JournalEntry,
+    JournalLine,
+    JournalLineDimension,
+)
 from opensumma.kernel.periods import (
     assert_period_open,
     close_period,
@@ -68,19 +102,30 @@ __all__ = [
     "DEFAULT_CHART_OF_ACCOUNTS",
     "DEFAULT_DIMENSIONS",
     "Account",
+    "AccountHasPostingsError",
     "AccountSpec",
     "AccountType",
     "AccountTypeMismatchError",
     "AccountingPeriod",
+    "AlreadyPostedError",
     "ClosedPeriodError",
     "Dimension",
     "DimensionSpec",
     "DimensionValue",
     "DuplicateCodeError",
+    "EntryStatusError",
+    "ImmutableEntryError",
     "InactiveAccountError",
     "InactiveDimensionValueError",
     "InvalidPeriodRangeError",
+    "IssueCode",
+    "JournalEntry",
+    "JournalEntryError",
+    "JournalEntryStatus",
+    "JournalLine",
+    "JournalLineDimension",
     "KernelError",
+    "LineInput",
     "NormalBalance",
     "NotPostableError",
     "OverlappingPeriodError",
@@ -88,7 +133,9 @@ __all__ = [
     "UnknownAccountError",
     "UnknownDimensionError",
     "UnknownDimensionValueError",
+    "UnknownJournalEntryError",
     "UnknownPeriodError",
+    "ValidationIssue",
     "activate_account",
     "add_dimension_value",
     "assert_period_open",
@@ -98,6 +145,7 @@ __all__ = [
     "create_account",
     "create_calendar_year_periods",
     "create_dimension",
+    "create_journal_entry",
     "create_period",
     "deactivate_account",
     "descendants",
@@ -107,12 +155,19 @@ __all__ = [
     "find_period",
     "get_account",
     "get_dimension",
+    "get_dimension_value",
+    "get_journal_entry",
     "get_period",
+    "has_postings",
     "period_for_date",
     "periods",
+    "post_journal_entry",
     "postable_accounts",
     "reopen_period",
     "resolve_dimension_value",
+    "reverse_journal_entry",
     "seed_chart_of_accounts",
     "seed_dimensions",
+    "validate_journal_entry",
+    "void_journal_entry",
 ]

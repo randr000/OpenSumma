@@ -5,8 +5,12 @@ import pytest
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
-import opensumma.kernel  # noqa: F401  (registers the kernel models on Base.metadata)
 from opensumma.db import Base, create_engine
+from opensumma.kernel import (
+    create_calendar_year_periods,
+    seed_chart_of_accounts,
+    seed_dimensions,
+)
 
 
 @pytest.fixture
@@ -23,13 +27,27 @@ def engine(database_url: str) -> Iterator[Engine]:
 
 
 @pytest.fixture
-def session(engine: Engine) -> Iterator[Session]:
-    """A session on an empty database with the current schema.
+def session() -> Iterator[Session]:
+    """A session on an empty in-memory database with the current schema.
 
-    The schema comes from the models rather than from Alembic, because it is far
-    faster per test and ``test_models_match_migrations`` already proves the two
-    agree. Acceptance tests go through ``init_db`` instead.
+    The schema comes from the models rather than from Alembic, and lives in memory
+    rather than in a file, because both are far faster per test: every DDL
+    statement on a file waits for the disk. ``test_models_match_migrations`` proves
+    models and migrations agree, and acceptance tests go through ``init_db`` on a
+    real file instead.
     """
+    engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
         yield session
+    engine.dispose()
+
+
+@pytest.fixture
+def books(session: Session) -> Session:
+    """A session whose books are open: the default chart, dimensions, and 2026."""
+    seed_chart_of_accounts(session)
+    seed_dimensions(session)
+    create_calendar_year_periods(session, 2026)
+    session.commit()
+    return session

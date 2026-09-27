@@ -42,25 +42,26 @@ init_db("sqlite:///opensumma.db")
 
 ## Using the kernel
 
-The accounting kernel is usable directly from Python, with no server running. Phase 1
-covers the chart of accounts, accounting periods, and dimensions.
+The accounting kernel is usable directly from Python, with no server running. It
+covers the chart of accounts, accounting periods, dimensions, and journal entries.
 
 ```python
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
 from opensumma.db import create_engine, init_db
 from opensumma.kernel import (
-    NotPostableError,
-    assert_postable,
+    JournalEntryError,
+    LineInput,
     create_calendar_year_periods,
-    get_account,
-    period_for_date,
-    postable_accounts,
-    resolve_dimension_value,
+    create_journal_entry,
+    post_journal_entry,
+    reverse_journal_entry,
     seed_chart_of_accounts,
     seed_dimensions,
+    validate_journal_entry,
 )
 
 url = "sqlite:///opensumma.db"
@@ -72,16 +73,42 @@ with Session(create_engine(url)) as session:
     create_calendar_year_periods(session, 2026)
     session.commit()
 
-    # Only leaf accounts are postable; parents only aggregate.
-    assert_postable(get_account(session, "6100"))
-    try:
-        assert_postable(get_account(session, "6000"))
-    except NotPostableError as error:
-        print(error)  # account 6000 aggregates child accounts; post to a leaf instead
+    # Record a draft, then validate and post it.
+    entry = create_journal_entry(
+        session,
+        entry_date=date(2026, 3, 15),
+        description="AWS invoice for March",
+        lines=[
+            LineInput(
+                "6100", debit=Decimal("120.50"), dimensions={"DEPARTMENT": "ENG"}
+            ),
+            LineInput("1111", credit=Decimal("120.50")),
+        ],
+    )
+    print(validate_journal_entry(session, entry))  # []
+    post_journal_entry(session, entry)
+    session.commit()
 
-    print(period_for_date(session, date(2026, 3, 15)).code)  # 2026-03
-    print(resolve_dimension_value(session, "DEPARTMENT", "ENG").name)  # Engineering
-    print(len(postable_accounts(session)))  # 30
+    # Validation reports every problem at once, with stable codes.
+    draft = create_journal_entry(
+        session,
+        entry_date=date(2026, 3, 15),
+        description="Misposted",
+        lines=[
+            LineInput("6000", debit=Decimal("10.00")),  # a parent account
+            LineInput("1111", credit=Decimal("9.99")),  # does not balance
+        ],
+    )
+    try:
+        post_journal_entry(session, draft)
+    except JournalEntryError as error:
+        print([issue.code.value for issue in error.issues])
+        # ['UNBALANCED', 'ACCOUNT_NOT_POSTABLE']
+
+    # A posted entry is never edited; it is reversed by a new entry.
+    reversal = reverse_journal_entry(session, entry, entry_date=date(2026, 3, 31))
+    session.commit()
+    print(entry.status.value, reversal.status.value)  # REVERSED POSTED
 ```
 
 ## Documentation

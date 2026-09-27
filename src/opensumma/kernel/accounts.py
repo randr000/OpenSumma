@@ -7,23 +7,25 @@ span more than one row:
 - codes are unique;
 - a child's account type matches its parent's, so a subtree reports as one type;
 - an account is active only if all of its ancestors are active;
-- only active leaf accounts are postable.
+- only active leaf accounts are postable;
+- an account that already holds posted lines cannot gain children.
 """
 
 from collections.abc import Iterator
 
-from sqlalchemy import select
+from sqlalchemy import exists, inspect, select
 from sqlalchemy.orm import Session, aliased
 
-from opensumma.kernel.enums import AccountType, NormalBalance
+from opensumma.kernel.enums import AccountType, JournalEntryStatus, NormalBalance
 from opensumma.kernel.errors import (
+    AccountHasPostingsError,
     AccountTypeMismatchError,
     DuplicateCodeError,
     InactiveAccountError,
     NotPostableError,
     UnknownAccountError,
 )
-from opensumma.kernel.models import Account
+from opensumma.kernel.models import Account, JournalEntry, JournalLine
 
 
 def create_account(
@@ -59,6 +61,11 @@ def create_account(
             raise InactiveAccountError(
                 f"cannot add active account {code} under inactive parent {parent.code}"
             )
+        if has_postings(session, parent):
+            raise AccountHasPostingsError(
+                f"account {parent.code} already has posted lines, so {code} cannot "
+                "be added beneath it"
+            )
 
     account = Account(
         code=code,
@@ -70,6 +77,18 @@ def create_account(
     )
     session.add(account)
     return account
+
+
+def has_postings(session: Session, account: Account) -> bool:
+    """True when a line of an entry in the ledger references ``account``."""
+    if not inspect(account).has_identity:
+        return False
+    in_ledger = [status for status in JournalEntryStatus if status.in_ledger]
+    posted_line = exists().where(
+        JournalLine.account_id == account.id,
+        JournalLine.entry.has(JournalEntry.status.in_(in_ledger)),
+    )
+    return bool(session.scalar(select(posted_line)))
 
 
 def find_account(session: Session, code: str) -> Account | None:

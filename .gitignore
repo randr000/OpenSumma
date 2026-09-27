@@ -12,6 +12,7 @@ dist/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.hypothesis/
 
 # Local databases (datasets are generated deterministically, never committed)
 *.db

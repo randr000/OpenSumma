@@ -8,7 +8,7 @@ in [progress.md](../progress.md).
 | --- | --- | --- |
 | 0 | Repository and development infrastructure | Complete |
 | 1 | Chart of accounts, dimensions, accounting periods | Complete |
-| 2 | Journal entries and deterministic validation | Not started |
+| 2 | Journal entries and deterministic validation | Complete |
 | 3 | Immutable ledger and financial reports | Not started |
 | 4 | Accounting Object model and event model | Not started |
 | 5 | Workflow / state machine | Not started |

@@ -78,13 +78,12 @@ def dimensions(session: Session) -> list[Dimension]:
     return list(session.scalars(select(Dimension).order_by(Dimension.code)))
 
 
-def resolve_dimension_value(
+def get_dimension_value(
     session: Session, dimension_code: str, value_code: str
 ) -> DimensionValue:
-    """Return the usable value ``value_code`` of dimension ``dimension_code``.
+    """Return value ``value_code`` of dimension ``dimension_code``, active or not.
 
-    Raises if the dimension is unknown, the value is unknown within it, or the
-    value has been retired.
+    Raises if the dimension is unknown or the value is unknown within it.
     """
     dimension = get_dimension(session, dimension_code)
     value = next(
@@ -95,6 +94,18 @@ def resolve_dimension_value(
         raise UnknownDimensionValueError(
             f"dimension {dimension_code} has no value coded {value_code!r}"
         )
+    return value
+
+
+def resolve_dimension_value(
+    session: Session, dimension_code: str, value_code: str
+) -> DimensionValue:
+    """Return the usable value ``value_code`` of dimension ``dimension_code``.
+
+    Raises if the dimension is unknown, the value is unknown within it, or the
+    value has been retired.
+    """
+    value = get_dimension_value(session, dimension_code, value_code)
     if not value.is_active:
         raise InactiveDimensionValueError(
             f"value {value_code!r} of dimension {dimension_code} is inactive"

@@ -1,3 +1,6 @@
+from datetime import date
+from decimal import Decimal
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -11,17 +14,24 @@ from opensumma.kernel.accounts import (
     deactivate_account,
     descendants,
     get_account,
+    has_postings,
     postable_accounts,
 )
 from opensumma.kernel.enums import AccountType, NormalBalance
 from opensumma.kernel.errors import (
+    AccountHasPostingsError,
     AccountTypeMismatchError,
     DuplicateCodeError,
     InactiveAccountError,
     NotPostableError,
     UnknownAccountError,
 )
-from opensumma.kernel.models import Account
+from opensumma.kernel.journal import (
+    LineInput,
+    create_journal_entry,
+    post_journal_entry,
+)
+from opensumma.kernel.models import Account, JournalEntry
 
 
 @pytest.fixture
@@ -334,3 +344,45 @@ def test_the_database_rejects_an_account_type_outside_the_five(
             text("UPDATE account SET account_type = 'GOODWILL' WHERE id = :id"),
             {"id": assets.id},
         )
+
+
+def _spend(session: Session, account: str) -> JournalEntry:
+    return create_journal_entry(
+        session,
+        entry_date=date(2026, 3, 15),
+        description="Spend",
+        lines=[
+            LineInput(account, debit=Decimal("10.00")),
+            LineInput("1111", credit=Decimal("10.00")),
+        ],
+    )
+
+
+def test_an_account_with_posted_lines_cannot_gain_children(books: Session) -> None:
+    post_journal_entry(books, _spend(books, "6100"))
+    software = get_account(books, "6100")
+
+    assert has_postings(books, software)
+    with pytest.raises(AccountHasPostingsError):
+        create_account(
+            books,
+            code="6110",
+            name="Cloud Hosting",
+            account_type=AccountType.EXPENSE,
+            parent=software,
+        )
+
+
+def test_draft_lines_are_not_postings(books: Session) -> None:
+    _spend(books, "6100")
+    software = get_account(books, "6100")
+
+    assert not has_postings(books, software)
+    create_account(
+        books,
+        code="6110",
+        name="Cloud Hosting",
+        account_type=AccountType.EXPENSE,
+        parent=software,
+    )
+    assert not software.is_postable

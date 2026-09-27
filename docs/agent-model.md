@@ -1,7 +1,8 @@
 # Agent Model
 
 **Status:** specification. Implemented across Phases 5 (workflow), 6 (audit),
-7–8 (REST, MCP), 10 (benchmark), and 11 (example agents).
+7–8 (REST, MCP), 10 (benchmark), and 11 (example agents). The kernel operations the
+journal tools will call exist since Phase 2; the permissions around them do not yet.
 
 ## Principle
 
@@ -56,6 +57,15 @@ approve_journal_entry    APPROVER
 post_journal_entry       POSTER
 reverse_journal_entry    POSTER
 ```
+
+## Validation results
+
+`validate_journal_entry` and a rejected `propose_journal_entry` return every problem
+at once, each as an issue with a stable code, a message, and a line number where one
+applies. The codes are listed in
+[accounting-model.md](accounting-model.md#two-tiers-of-rules). Agents act on codes, not
+on message text, and benchmarks compare them exactly: JE-002 ("validate a journal
+entry") is scored by whether an agent reports the expected codes.
 
 ## Audit
 
