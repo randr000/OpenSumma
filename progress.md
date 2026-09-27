@@ -29,6 +29,11 @@ Phase 0 acceptance criteria:
 
 Also added: `docs/agent-model.md`, `docs/roadmap.md`, `README.md`, and mypy (strict).
 
+Money storage (decided early, ahead of Phase 2): `ledgerlab.money.Money` stores amounts
+as exact integer cents, never floats. `round_money()` rounds to two decimal places
+(half-up) where amounts enter the system, and the column rejects anything with more than
+two decimal places.
+
 ## In Progress:
 
 Nothing.
@@ -46,14 +51,12 @@ postable leaf accounts and the currency scope.
   pass locally on Python 3.12 and 3.13.
 - There is no license file yet. The project is intended to be open source, but the license
   has not been chosen.
-- How money is stored on SQLite (Phase 2) is still an open decision; see
-  docs/accounting-model.md.
 
 ## Last Verification:
 
 2026-09-27, on Python 3.12.14 and 3.13.15:
 
-- `pytest`: 9 passed (3 unit, 5 integration, 1 acceptance)
+- `pytest`: 25 passed (12 unit, 12 integration, 1 acceptance)
 - `ruff check .`: passed
 - `ruff format --check .`: passed
 - `mypy` (strict): passed

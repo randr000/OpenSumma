@@ -14,8 +14,8 @@ These are non-negotiable, and every phase must preserve them.
 3. A posted journal entry is never edited or deleted. It can only be reversed by another
    journal entry.
 4. A closed accounting period accepts no postings.
-5. All monetary amounts use `Decimal`. Floating-point arithmetic is never used for
-   amounts.
+5. All monetary amounts use `Decimal` with exactly two decimal places. Floating-point
+   arithmetic is never used for amounts. See [Money](#money).
 6. A journal entry has at least two lines. Each line is either a debit or a credit, never
    both, and amounts are non-negative.
 
@@ -30,6 +30,24 @@ Business Event → Accounting Object → Accounting Decision → Journal Entry
 
 Financial reports (trial balance, general ledger, income statement, balance sheet) are
 derived only from the posted ledger, never from Accounting Objects.
+
+## Money
+
+Implemented in `ledgerlab.money`.
+
+- SQLite has no decimal type. A `NUMERIC` column stores `0.10` as a binary float, and
+  `SUM` of 0.10 and 0.20 returns `0.30000000000000004`. Amounts are therefore stored as
+  integer cents in the `Money` column type (`BIGINT`), which is exact on SQLite and
+  PostgreSQL, and SQL `SUM()` stays exact too.
+- `round_money()` rounds to two decimal places, with halves rounding away from zero
+  (`ROUND_HALF_UP`). Amounts are rounded once, explicitly, where they enter the system,
+  before validation. Floats are rejected.
+- The `Money` column never rounds. It rejects any value with more than two decimal places,
+  any non-`Decimal` value, and NaN or infinity. An entry validated as balanced is
+  therefore exactly the entry recorded. Silent rounding on write could turn a validated,
+  balanced entry into an unbalanced one.
+- Migrations record `Money` columns as `sa.BigInteger()` and don't import application
+  code.
 
 ## Accounts (Phase 1)
 
@@ -88,21 +106,12 @@ ledger only through journal entries, which go through normal validation.
 
 These should be settled before or during the phase named.
 
-1. **How money is stored (Phase 2).** SQLite has no decimal type, and SQLAlchemy's
-   `Numeric` on SQLite converts through float. The test configuration turns
-   SQLAlchemy's warning about this into an error. The options:
-   - *Integer minor units* (`BigInteger`, converted to and from `Decimal` at the
-     persistence boundary). This is exact everywhere, and SQL `SUM()` stays exact on both
-     SQLite and PostgreSQL. It needs a defined scale per currency.
-   - *String-backed `Decimal` type on SQLite*, with `Numeric` on PostgreSQL. Storage is
-     exact, but SQL aggregation doesn't work on SQLite.
-
-   Recommendation: integer minor units.
-2. **Currencies (Phase 1/2).** The recommendation is a single functional currency per
-   company at first, with multi-currency deferred.
-3. **Zero-amount lines (Phase 2).** The recommendation is that each line has exactly one
+1. **Currencies (Phase 1/2).** The recommendation is a single functional currency per
+   company at first, with multi-currency deferred. The fixed two-decimal `Money` type
+   assumes a currency with cents.
+2. **Zero-amount lines (Phase 2).** The recommendation is that each line has exactly one
    strictly positive side.
-4. **Posting to parent accounts (Phase 1).** The recommendation is that only leaf
+3. **Posting to parent accounts (Phase 1).** The recommendation is that only leaf
    accounts are postable, and parents aggregate.
-5. **Timestamps.** Store them in UTC and keep them timezone-aware in Python (Ruff's `DTZ`
+4. **Timestamps.** Store them in UTC and keep them timezone-aware in Python (Ruff's `DTZ`
    rules enforce this). Accounting dates are plain `date` values, not timestamps.

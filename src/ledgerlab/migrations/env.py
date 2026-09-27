@@ -1,12 +1,15 @@
 """Alembic migration environment for LedgerLab."""
 
 from logging.config import fileConfig
+from typing import Any, Literal
 
 from alembic import context
+from alembic.autogenerate.api import AutogenContext
 from sqlalchemy import create_engine
 from sqlalchemy.pool import NullPool
 
 from ledgerlab.db import Base, get_database_url
+from ledgerlab.money import Money
 
 # Import persistence model modules here as they are added, so that
 # autogenerate can compare them against the database.
@@ -21,6 +24,16 @@ target_metadata = Base.metadata
 
 def _database_url() -> str:
     return config.get_main_option("sqlalchemy.url") or get_database_url()
+
+
+def _render_item(
+    type_: str, obj: Any, autogen_context: AutogenContext
+) -> str | Literal[False]:
+    # Migrations record the physical column type rather than importing
+    # application types, which may change after the migration is written.
+    if type_ == "type" and isinstance(obj, Money):
+        return "sa.BigInteger()"
+    return False
 
 
 def run_migrations_offline() -> None:
@@ -49,6 +62,7 @@ def run_migrations_online() -> None:
             # SQLite cannot ALTER most columns and constraints in place; batch
             # mode rebuilds the table there and emits plain ALTERs elsewhere.
             render_as_batch=True,
+            render_item=_render_item,
         )
         with context.begin_transaction():
             context.run_migrations()
