@@ -11,12 +11,16 @@ more than two decimal places, so a value validated as balanced is exactly the
 value recorded.
 """
 
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from sqlalchemy import BigInteger, Dialect
 from sqlalchemy.types import TypeDecorator
 
 CENT = Decimal("0.01")
+ZERO = Decimal("0.00")
+
+# The largest magnitude a signed 64-bit BIGINT column can hold, in cents.
+MAX_CENTS = 2**63 - 1
 
 
 def round_money(value: Decimal | int | str) -> Decimal:
@@ -29,6 +33,29 @@ def round_money(value: Decimal | int | str) -> Decimal:
     return amount.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
+def ensure_money(value: object) -> Decimal:
+    """Return ``value`` as an exact two-decimal amount, or raise.
+
+    Never rounds. An amount with a fraction of a cent is rejected rather than
+    adjusted, so the amount validated is exactly the amount recorded; callers that
+    intend to round call ``round_money`` first.
+    """
+    if not isinstance(value, Decimal):
+        raise TypeError(f"monetary amounts must be Decimal, got {type(value).__name__}")
+    try:
+        exact = value.quantize(CENT)
+    except InvalidOperation:
+        raise ValueError(f"{value} is not a representable monetary amount") from None
+    if not value.is_finite() or value != exact:
+        raise ValueError(
+            f"{value} is not a two-decimal amount; round it with round_money() "
+            "before it is validated and recorded"
+        )
+    if abs(exact.scaleb(2)) > MAX_CENTS:
+        raise ValueError(f"{value} is too large to record")
+    return exact
+
+
 class Money(TypeDecorator[Decimal]):
     """A two-decimal monetary amount, stored as integer cents."""
 
@@ -38,16 +65,7 @@ class Money(TypeDecorator[Decimal]):
     def process_bind_param(self, value: Decimal | None, dialect: Dialect) -> int | None:
         if value is None:
             return None
-        if not isinstance(value, Decimal):
-            raise TypeError(
-                f"monetary amounts must be Decimal, got {type(value).__name__}"
-            )
-        if not value.is_finite() or value != value.quantize(CENT):
-            raise ValueError(
-                f"{value} is not a two-decimal amount; round it with round_money() "
-                "before it is validated and recorded"
-            )
-        return int(value.scaleb(2))
+        return int(ensure_money(value).scaleb(2))
 
     def process_result_value(
         self, value: int | None, dialect: Dialect
