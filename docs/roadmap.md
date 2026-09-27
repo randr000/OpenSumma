@@ -7,7 +7,7 @@ in [progress.md](../progress.md).
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 0 | Repository and development infrastructure | Complete |
-| 1 | Chart of accounts, dimensions, accounting periods | Not started |
+| 1 | Chart of accounts, dimensions, accounting periods | Complete |
 | 2 | Journal entries and deterministic validation | Not started |
 | 3 | Immutable ledger and financial reports | Not started |
 | 4 | Accounting Object model and event model | Not started |

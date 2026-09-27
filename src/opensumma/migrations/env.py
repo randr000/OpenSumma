@@ -8,11 +8,10 @@ from alembic.autogenerate.api import AutogenContext
 from sqlalchemy import create_engine
 from sqlalchemy.pool import NullPool
 
+import opensumma.kernel  # noqa: F401  (registers the kernel models on Base.metadata)
 from opensumma.db import Base, get_database_url
 from opensumma.money import Money
-
-# Import persistence model modules here as they are added, so that
-# autogenerate can compare them against the database.
+from opensumma.utc import UtcDateTime
 
 config = context.config
 
@@ -33,6 +32,8 @@ def _render_item(
     # application types, which may change after the migration is written.
     if type_ == "type" and isinstance(obj, Money):
         return "sa.BigInteger()"
+    if type_ == "type" and isinstance(obj, UtcDateTime):
+        return "sa.DateTime(timezone=True)"
     return False
 
 
