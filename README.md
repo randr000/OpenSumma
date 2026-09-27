@@ -43,7 +43,8 @@ init_db("sqlite:///opensumma.db")
 ## Using the kernel
 
 The accounting kernel is usable directly from Python, with no server running. It
-covers the chart of accounts, accounting periods, dimensions, and journal entries.
+covers the chart of accounts, accounting periods, dimensions, journal entries, the
+ledger they post to, and the financial reports derived from it.
 
 ```python
 from datetime import date
@@ -55,12 +56,15 @@ from opensumma.db import create_engine, init_db
 from opensumma.kernel import (
     JournalEntryError,
     LineInput,
+    balance_sheet,
     create_calendar_year_periods,
     create_journal_entry,
+    income_statement,
     post_journal_entry,
     reverse_journal_entry,
     seed_chart_of_accounts,
     seed_dimensions,
+    trial_balance,
     validate_journal_entry,
 )
 
@@ -73,20 +77,30 @@ with Session(create_engine(url)) as session:
     create_calendar_year_periods(session, 2026)
     session.commit()
 
-    # Record a draft, then validate and post it.
-    entry = create_journal_entry(
+    # Record drafts, then validate and post them.
+    capital = create_journal_entry(
+        session,
+        entry_date=date(2026, 3, 1),
+        description="Owner investment",
+        lines=[
+            LineInput("1111", debit=Decimal("10000.00")),
+            LineInput("3100", credit=Decimal("10000.00")),
+        ],
+    )
+    aws = create_journal_entry(
         session,
         entry_date=date(2026, 3, 15),
-        description="AWS invoice for March",
+        description="AWS invoice for March, unpaid",
         lines=[
             LineInput(
                 "6100", debit=Decimal("120.50"), dimensions={"DEPARTMENT": "ENG"}
             ),
-            LineInput("1111", credit=Decimal("120.50")),
+            LineInput("2110", credit=Decimal("120.50")),
         ],
     )
-    print(validate_journal_entry(session, entry))  # []
-    post_journal_entry(session, entry)
+    print(validate_journal_entry(session, aws))  # []
+    for entry in (capital, aws):
+        post_journal_entry(session, entry)
     session.commit()
 
     # Validation reports every problem at once, with stable codes.
@@ -105,10 +119,19 @@ with Session(create_engine(url)) as session:
         print([issue.code.value for issue in error.issues])
         # ['UNBALANCED', 'ACCOUNT_NOT_POSTABLE']
 
+    # Reports derive from the posted ledger only; the draft above is not in it.
+    march_end = date(2026, 3, 31)
+    trial = trial_balance(session, as_of=march_end)
+    print(trial.total_debits, trial.total_credits)  # 10120.50 10120.50
+    march = income_statement(session, start=date(2026, 3, 1), end=march_end)
+    print(march.net_income)  # -120.50
+    sheet = balance_sheet(session, as_of=march_end)
+    print(sheet.assets.total, sheet.total_liabilities_and_equity)  # 10000.00 10000.00
+
     # A posted entry is never edited; it is reversed by a new entry.
-    reversal = reverse_journal_entry(session, entry, entry_date=date(2026, 3, 31))
+    reversal = reverse_journal_entry(session, aws, entry_date=march_end)
     session.commit()
-    print(entry.status.value, reversal.status.value)  # REVERSED POSTED
+    print(aws.status.value, reversal.status.value)  # REVERSED POSTED
 ```
 
 ## Documentation

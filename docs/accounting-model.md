@@ -1,6 +1,6 @@
 # Accounting Model
 
-**Status:** Phases 1 and 2 are implemented; later phases are still specification.
+**Status:** Phases 1 to 3 are implemented; later phases are still specification.
 Each section names the phase that implements it.
 
 ## Invariants
@@ -216,8 +216,8 @@ This is enforced below the services, on every SQLAlchemy session:
   they would bypass the flush hook.
 
 Raw SQL on a database connection is beyond these hooks. Agents never receive SQL
-access, so that is the boundary; database triggers could close it, and Phase 3 may add
-them if the immutable ledger needs a stronger guarantee.
+access, so that is the boundary. Database triggers were considered and rejected; see
+[Settled decisions](#settled-decisions).
 
 ### Reversal
 
@@ -238,6 +238,70 @@ them if the immutable ledger needs a stronger guarantee.
 An account that already has posted lines cannot gain child accounts, because that
 would turn an account holding ledger history into an aggregate that may hold none.
 Draft lines do not count; such a draft simply fails validation later.
+
+## The ledger and financial reports (Phase 3)
+
+Implemented in `opensumma.kernel.ledger` and `opensumma.kernel.reports`.
+
+### The ledger
+
+The ledger is every line of every journal entry whose status is POSTED or REVERSED. It
+is not a copy of the journal: a separate table would be a second source of truth that
+had to be kept in step with the first, and posted lines already have every property a
+ledger needs.
+
+- **Immutable.** A posted entry's lines never change (see [Immutability](#immutability)).
+- **Append-only.** An entry never leaves the ledger once it is in: the only change a
+  posted entry may undergo, POSTED to REVERSED, keeps it there. A reversal adds lines;
+  it never removes any.
+- **Complete.** A reversed entry stays beside its reversal, so the ledger records both
+  the mistake and its correction.
+
+Reports read the ledger only through `posted_activity`, `activity_before`,
+`account_balance`, and `ledger_lines`, which all filter on those two statuses. No report
+can see a draft, a proposal, a voided entry, or an Accounting Object.
+
+### Balances and signs
+
+- `account_balance` states a balance in the account's normal direction, so it is
+  positive when the account carries its usual balance. A parent's balance is the sum of
+  the accounts below it in the parent's direction, so a contra account reduces it: fixed
+  assets are shown net of accumulated depreciation.
+- The **trial balance** puts each account's net balance in the debit or the credit
+  column, whichever it falls in, and leaves off accounts that net to nothing. Its two
+  column totals are equal whenever the ledger is intact.
+- The **general ledger** lists each account's lines by date, then entry, then line,
+  between an opening balance brought forward and a closing balance, with a running
+  balance in the account's normal direction. Lines keep their memos and dimensions.
+- **Financial statements** state each amount in its section's normal direction and roll
+  it up the account hierarchy, so a contra account shows as negative within its
+  section: accumulated depreciation reduces assets, sales returns reduce revenue.
+  Accounts whose amount is zero are left off.
+- Every account the ledger touches is reported, active or not. An account retired after
+  it was posted to still holds that history, and omitting it would unbalance the report.
+
+### Dates
+
+Reports take explicit dates and never default to "today", so a report depends only on
+the ledger. The trial balance and balance sheet are *as of* a date: everything posted up
+to and including it. The income statement and general ledger cover a range, inclusive
+at both ends. A date range that runs backwards is an error, and so is a timestamp in
+place of a date.
+
+### Unclosed net income
+
+Revenue and expense accounts are not yet closed into retained earnings; closing belongs
+with period close in Phase 5. Until then, the net income posted up to a balance sheet's
+date belongs to the owners without sitting in any equity account. The balance sheet
+reports it as `unclosed_net_income` and includes it in total equity:
+
+```text
+Assets = Liabilities + Equity accounts + unclosed net income
+```
+
+Double entry guarantees this equation; `BalanceSheet.is_balanced` checks it. Once
+closing entries exist they move earnings into retained earnings and reduce revenue and
+expense accounts to zero, so the same calculation remains correct without change.
 
 ## Accounting Objects (Phase 4)
 
@@ -261,6 +325,9 @@ ledger only through journal entries, which go through normal validation.
 | Rounding at the kernel | Never; sub-cent amounts are rejected, callers round explicitly |
 | Correcting a posted entry | Reverse it and post a new one; never edit or void it |
 | Reversal date | Required from the caller; never defaulted |
+| The ledger | Posted journal lines, not a separate copied table |
+| Database triggers for immutability | Not used; session hooks enforce it (below) |
+| Report dates | Always explicit; a report never depends on today's date |
 
 ## Open design decisions
 
@@ -272,9 +339,16 @@ These should be settled before or during the phase named.
 2. **Sequential period close (Phase 5).** Closing a period does not require earlier
    periods to be closed, and reopening is unrestricted. Both belong with the workflow
    engine and its permissions rather than with the kernel.
-3. **Required dimensions (Phase 3 or later).** Whether a dimension may be mandatory,
-   globally or per account, is still open. Lines can carry dimensions now, but no
-   report depends on them yet, so there is no evidence for which rule is right.
-4. **Database-enforced immutability (Phase 3).** Recorded entries are protected by
-   session hooks, which raw SQL can bypass. Triggers would close that gap, but they are
-   written differently for SQLite and PostgreSQL.
+3. **Required dimensions (Phase 9 or later).** Whether a dimension may be mandatory,
+   globally or per account, is still open. The general ledger shows each line's
+   dimensions, but no report is broken down by them yet. The dataset generator and the
+   "wrong department" benchmark tasks will show which rule is useful.
+4. **Closing entries (Phase 5).** Year-end close, which moves net income into retained
+   earnings, belongs with period close. Until then the balance sheet carries net income
+   as `unclosed_net_income`.
+
+Database triggers for immutability were decided against in Phase 3. CLAUDE.md allows
+database-specific SQL only where it is unavoidable, and here it is avoidable: the only
+writers are the kernel's own sessions, agents never get SQL access, and raw-SQL
+tampering by someone with direct database access is outside the system's boundary. The
+trial balance and balance sheet totals would expose most such tampering in any case.

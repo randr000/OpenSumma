@@ -1,8 +1,9 @@
 """The accounting kernel: deterministic accounting master data and rules.
 
 Phase 1 covers the chart of accounts, accounting periods, and dimensions. Phase 2
-adds journal entries: recording, validation, posting, voiding, and reversal. The
-immutable ledger and financial reports arrive in Phase 3.
+adds journal entries: recording, validation, posting, voiding, and reversal. Phase 3
+adds the ledger they post to and the reports derived from it: trial balance,
+general ledger, income statement, and balance sheet.
 
 The kernel is usable directly from Python and depends on nothing above it. Every
 name a caller needs is re-exported here, so importing this package is also what
@@ -32,6 +33,7 @@ from opensumma.kernel.dimensions import (
     resolve_dimension_value,
 )
 from opensumma.kernel.enums import (
+    LEDGER_STATUSES,
     AccountType,
     IssueCode,
     JournalEntryStatus,
@@ -69,6 +71,15 @@ from opensumma.kernel.journal import (
     validate_journal_entry,
     void_journal_entry,
 )
+from opensumma.kernel.ledger import (
+    AccountBalance,
+    Activity,
+    LedgerLine,
+    account_balance,
+    activity_before,
+    ledger_lines,
+    posted_activity,
+)
 from opensumma.kernel.models import (
     Account,
     AccountingPeriod,
@@ -89,6 +100,21 @@ from opensumma.kernel.periods import (
     periods,
     reopen_period,
 )
+from opensumma.kernel.reports import (
+    BalanceSheet,
+    GeneralLedger,
+    GeneralLedgerAccount,
+    GeneralLedgerLine,
+    IncomeStatement,
+    StatementLine,
+    StatementSection,
+    TrialBalance,
+    TrialBalanceLine,
+    balance_sheet,
+    general_ledger,
+    income_statement,
+    trial_balance,
+)
 from opensumma.kernel.seed import (
     DEFAULT_CHART_OF_ACCOUNTS,
     DEFAULT_DIMENSIONS,
@@ -101,22 +127,30 @@ from opensumma.kernel.seed import (
 __all__ = [
     "DEFAULT_CHART_OF_ACCOUNTS",
     "DEFAULT_DIMENSIONS",
+    "LEDGER_STATUSES",
     "Account",
+    "AccountBalance",
     "AccountHasPostingsError",
     "AccountSpec",
     "AccountType",
     "AccountTypeMismatchError",
     "AccountingPeriod",
+    "Activity",
     "AlreadyPostedError",
+    "BalanceSheet",
     "ClosedPeriodError",
     "Dimension",
     "DimensionSpec",
     "DimensionValue",
     "DuplicateCodeError",
     "EntryStatusError",
+    "GeneralLedger",
+    "GeneralLedgerAccount",
+    "GeneralLedgerLine",
     "ImmutableEntryError",
     "InactiveAccountError",
     "InactiveDimensionValueError",
+    "IncomeStatement",
     "InvalidPeriodRangeError",
     "IssueCode",
     "JournalEntry",
@@ -125,21 +159,29 @@ __all__ = [
     "JournalLine",
     "JournalLineDimension",
     "KernelError",
+    "LedgerLine",
     "LineInput",
     "NormalBalance",
     "NotPostableError",
     "OverlappingPeriodError",
     "PeriodStatus",
+    "StatementLine",
+    "StatementSection",
+    "TrialBalance",
+    "TrialBalanceLine",
     "UnknownAccountError",
     "UnknownDimensionError",
     "UnknownDimensionValueError",
     "UnknownJournalEntryError",
     "UnknownPeriodError",
     "ValidationIssue",
+    "account_balance",
     "activate_account",
+    "activity_before",
     "add_dimension_value",
     "assert_period_open",
     "assert_postable",
+    "balance_sheet",
     "chart_of_accounts",
     "close_period",
     "create_account",
@@ -153,21 +195,26 @@ __all__ = [
     "find_account",
     "find_dimension",
     "find_period",
+    "general_ledger",
     "get_account",
     "get_dimension",
     "get_dimension_value",
     "get_journal_entry",
     "get_period",
     "has_postings",
+    "income_statement",
+    "ledger_lines",
     "period_for_date",
     "periods",
     "post_journal_entry",
     "postable_accounts",
+    "posted_activity",
     "reopen_period",
     "resolve_dimension_value",
     "reverse_journal_entry",
     "seed_chart_of_accounts",
     "seed_dimensions",
+    "trial_balance",
     "validate_journal_entry",
     "void_journal_entry",
 ]

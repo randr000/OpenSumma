@@ -21,7 +21,7 @@ which actors may post is the workflow engine's decision (Phase 5), not the kerne
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -48,7 +48,7 @@ from opensumma.kernel.models import (
 )
 from opensumma.kernel.periods import period_for_date
 from opensumma.money import ZERO, ensure_money
-from opensumma.utc import utcnow
+from opensumma.utc import ensure_date, utcnow
 
 
 @dataclass(frozen=True)
@@ -79,7 +79,7 @@ def create_journal_entry(
     being stored. An entry that can be stored but not posted, such as an unbalanced
     one, is recorded; ``validate_journal_entry`` reports why it cannot be posted.
     """
-    _require_date(entry_date)
+    ensure_date(entry_date)
     issues = _description_issues(description)
     built: list[JournalLine] = []
     for number, spec in enumerate(lines, start=1):
@@ -207,7 +207,7 @@ def reverse_journal_entry(
     validated like any other entry, so it needs an open period on ``entry_date``
     and accounts that are still postable; if it is not valid, nothing changes.
     """
-    _require_date(entry_date)
+    ensure_date(entry_date)
     if entry.status is not JournalEntryStatus.POSTED:
         if entry.status is JournalEntryStatus.REVERSED and entry.reversed_by:
             reason = f"is already reversed by journal entry {entry.reversed_by.id}"
@@ -335,14 +335,6 @@ def _description_issues(description: str) -> list[ValidationIssue]:
             )
         ]
     return []
-
-
-def _require_date(value: object) -> None:
-    # datetime is a subclass of date, but an accounting date is not an instant.
-    if isinstance(value, datetime) or not isinstance(value, date):
-        raise TypeError(
-            f"an accounting date must be a date, not {type(value).__name__}"
-        )
 
 
 def _mark_posted(entry: JournalEntry) -> None:

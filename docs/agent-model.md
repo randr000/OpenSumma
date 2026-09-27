@@ -2,7 +2,9 @@
 
 **Status:** specification. Implemented across Phases 5 (workflow), 6 (audit),
 7–8 (REST, MCP), 10 (benchmark), and 11 (example agents). The kernel operations the
-journal tools will call exist since Phase 2; the permissions around them do not yet.
+journal tools will call exist since Phase 2, and those behind `get_account_balance`,
+`get_trial_balance`, and `get_general_ledger` since Phase 3; the permissions around them
+do not yet.
 
 ## Principle
 

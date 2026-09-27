@@ -59,7 +59,7 @@ Persistence details (table names, keys, SQL) do not leak into the agent interfac
 
 ## Package layout
 
-Current state (Phase 2):
+Current state (Phase 3):
 
 ```text
 src/opensumma/
@@ -74,6 +74,8 @@ src/opensumma/
         periods.py          accounting period services
         dimensions.py       dimension services
         journal.py          journal entries: record, validate, post, void, reverse
+        ledger.py           the ledger: posted lines, activity, and account balances
+        reports.py          trial balance, general ledger, income statement, balance sheet
         seed.py             default chart of accounts and dimensions
     migrations/         Alembic environment and revisions, shipped inside the package
 tests/
@@ -85,7 +87,8 @@ docs/
 
 The top-level modules are persistence primitives that every layer above may use.
 `kernel/` is the accounting domain: it depends on those primitives and on nothing
-above itself. The ledger and financial reports join it in Phase 3.
+above itself. Reports read posted data only through `ledger.py`, which is what makes
+"reports derive from the ledger" a property of the code rather than a convention.
 
 `opensumma.kernel` re-exports everything a caller needs, so importing it is both the
 public API and what registers the persistence models on `Base.metadata`.
@@ -143,6 +146,12 @@ Modules for later layers are added in the phase that needs them (see
 - Foreign-key enforcement is off while migrating, because batch mode drops and recreates
   tables.
 - Generated revisions are formatted and linted by Ruff through post-write hooks.
+- Offline SQL generation (`alembic upgrade head --sql`) works for PostgreSQL, where a
+  DBA would use it, and a test keeps it working. It does not work for SQLite past
+  revision `5db61b0df835`: that revision adds a constraint to an existing table, which
+  SQLite can only do by rebuilding the table, and batch mode must read the live table to
+  rebuild it. SQLite databases are always migrated live, through `init_db()` or
+  `alembic upgrade head`.
 
 Workflow for schema changes:
 

@@ -73,6 +73,13 @@ class JournalEntryStatus(StrEnum):
         return self.in_ledger or self is JournalEntryStatus.VOIDED
 
 
+# The statuses whose entries make up the ledger, in a fixed order so that the SQL
+# built from them is always the same.
+LEDGER_STATUSES: tuple[JournalEntryStatus, ...] = tuple(
+    status for status in JournalEntryStatus if status.in_ledger
+)
+
+
 class IssueCode(StrEnum):
     """Why a journal entry cannot be recorded or posted.
 

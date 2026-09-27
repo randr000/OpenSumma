@@ -16,7 +16,7 @@ from collections.abc import Iterator
 from sqlalchemy import exists, inspect, select
 from sqlalchemy.orm import Session, aliased
 
-from opensumma.kernel.enums import AccountType, JournalEntryStatus, NormalBalance
+from opensumma.kernel.enums import LEDGER_STATUSES, AccountType, NormalBalance
 from opensumma.kernel.errors import (
     AccountHasPostingsError,
     AccountTypeMismatchError,
@@ -83,10 +83,9 @@ def has_postings(session: Session, account: Account) -> bool:
     """True when a line of an entry in the ledger references ``account``."""
     if not inspect(account).has_identity:
         return False
-    in_ledger = [status for status in JournalEntryStatus if status.in_ledger]
     posted_line = exists().where(
         JournalLine.account_id == account.id,
-        JournalLine.entry.has(JournalEntry.status.in_(in_ledger)),
+        JournalLine.entry.has(JournalEntry.status.in_(LEDGER_STATUSES)),
     )
     return bool(session.scalar(select(posted_line)))
 

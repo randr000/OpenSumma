@@ -37,6 +37,7 @@ from sqlalchemy.orm import (
 
 from opensumma.db import Base, TimestampMixin
 from opensumma.kernel.enums import (
+    LEDGER_STATUSES,
     AccountType,
     IssueCode,
     JournalEntryStatus,
@@ -222,9 +223,7 @@ class DimensionValue(TimestampMixin, Base):
 
 DESCRIPTION_LENGTH = 500
 
-_LEDGER_STATUSES = ", ".join(
-    f"'{status.value}'" for status in JournalEntryStatus if status.in_ledger
-)
+_LEDGER_STATUSES = ", ".join(f"'{status.value}'" for status in LEDGER_STATUSES)
 
 
 class JournalEntry(TimestampMixin, Base):
@@ -250,7 +249,7 @@ class JournalEntry(TimestampMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    entry_date: Mapped[date]
+    entry_date: Mapped[date] = mapped_column(index=True)
     description: Mapped[str] = mapped_column(String(DESCRIPTION_LENGTH))
     status: Mapped[JournalEntryStatus] = mapped_column(
         _enum_column(JournalEntryStatus), default=JournalEntryStatus.DRAFT
