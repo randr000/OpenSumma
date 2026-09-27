@@ -2,7 +2,7 @@
 
 ## Project Identity
 
-You are working on an open-source Python project called **LedgerLab**.
+You are working on an open-source Python project called **OpenSumma**.
 
 The project's purpose is NOT to build a full commercial ERP.
 

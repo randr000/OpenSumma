@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from ledgerlab.money import round_money
+from opensumma.money import round_money
 
 
 @pytest.mark.parametrize(

@@ -33,7 +33,7 @@ derived only from the posted ledger, never from Accounting Objects.
 
 ## Money
 
-Implemented in `ledgerlab.money`.
+Implemented in `opensumma.money`.
 
 - SQLite has no decimal type. A `NUMERIC` column stores `0.10` as a binary float, and
   `SUM` of 0.10 and 0.20 returns `0.30000000000000004`. Amounts are therefore stored as

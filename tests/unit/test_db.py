@@ -1,6 +1,6 @@
 import pytest
 
-from ledgerlab.db import (
+from opensumma.db import (
     DATABASE_URL_ENV,
     DEFAULT_DATABASE_URL,
     alembic_config,

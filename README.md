@@ -1,8 +1,8 @@
-# LedgerLab
+# OpenSumma
 
 An open-source accounting environment for building and evaluating AI accounting agents.
 
-LedgerLab provides a deterministic double-entry accounting kernel that AI agents interact
+OpenSumma provides a deterministic double-entry accounting kernel that AI agents interact
 with through semantic tools and workflows. The core rule:
 
 > **AI proposes and reasons. The accounting kernel validates and records.**
@@ -30,14 +30,14 @@ mypy                     # type-check
 alembic upgrade head     # create/upgrade the database schema
 ```
 
-The database URL is read from `LEDGERLAB_DATABASE_URL` and defaults to
-`sqlite:///ledgerlab.db` in the current directory. The schema can also be created from
+The database URL is read from `OPENSUMMA_DATABASE_URL` and defaults to
+`sqlite:///opensumma.db` in the current directory. The schema can also be created from
 Python:
 
 ```python
-from ledgerlab.db import init_db
+from opensumma.db import init_db
 
-init_db("sqlite:///ledgerlab.db")
+init_db("sqlite:///opensumma.db")
 ```
 
 ## Documentation

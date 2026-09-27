@@ -14,7 +14,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import StatementError
 
-from ledgerlab.money import Money
+from opensumma.money import Money
 
 metadata = MetaData()
 amounts = Table(

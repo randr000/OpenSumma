@@ -4,7 +4,7 @@ from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine
 
-from ledgerlab.db import alembic_config, init_db
+from opensumma.db import alembic_config, init_db
 
 
 def test_fresh_sqlite_database_is_initialized_at_latest_schema(

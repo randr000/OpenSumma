@@ -1,4 +1,4 @@
-"""Alembic migration environment for LedgerLab."""
+"""Alembic migration environment for OpenSumma."""
 
 from logging.config import fileConfig
 from typing import Any, Literal
@@ -8,8 +8,8 @@ from alembic.autogenerate.api import AutogenContext
 from sqlalchemy import create_engine
 from sqlalchemy.pool import NullPool
 
-from ledgerlab.db import Base, get_database_url
-from ledgerlab.money import Money
+from opensumma.db import Base, get_database_url
+from opensumma.money import Money
 
 # Import persistence model modules here as they are added, so that
 # autogenerate can compare them against the database.
@@ -50,7 +50,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    # A plain engine rather than ledgerlab.db.create_engine: SQLite foreign-key
+    # A plain engine rather than opensumma.db.create_engine: SQLite foreign-key
     # enforcement stays off while migrating, because batch mode rebuilds tables
     # by dropping and recreating them, which would otherwise trigger ON DELETE
     # actions or fail on referencing rows.

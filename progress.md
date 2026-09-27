@@ -13,10 +13,10 @@ Complete. All Phase 0 acceptance criteria are satisfied. Phase 1 has not started
 Phase 0 acceptance criteria:
 
 - [x] Python project initializes successfully (`pyproject.toml`, hatchling, `src/` layout,
-  package `ledgerlab`, Python >= 3.12)
+  package `opensumma`, Python >= 3.12)
 - [x] Package installs successfully (editable and non-editable; the built wheel contains the
   migrations)
-- [x] SQLite connection works (`ledgerlab.db.create_engine`, foreign keys enforced)
+- [x] SQLite connection works (`opensumma.db.create_engine`, foreign keys enforced)
 - [x] Alembic works (in-package migrations, baseline revision, `alembic.ini` for the CLI,
   `init_db()` for code, upgrade/downgrade round trip, model/migration drift check)
 - [x] pytest works (unit / integration / acceptance layout; warnings are errors)
@@ -29,7 +29,7 @@ Phase 0 acceptance criteria:
 
 Also added: `docs/agent-model.md`, `docs/roadmap.md`, `README.md`, and mypy (strict).
 
-Money storage (decided early, ahead of Phase 2): `ledgerlab.money.Money` stores amounts
+Money storage (decided early, ahead of Phase 2): `opensumma.money.Money` stores amounts
 as exact integer cents, never floats. `round_money()` rounds to two decimal places
 (half-up) where amounts enter the system, and the column rejects anything with more than
 two decimal places.
