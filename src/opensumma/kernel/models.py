@@ -12,12 +12,10 @@ flush a change to a posted, reversed, or voided entry.
 from collections.abc import Iterable
 from datetime import date, datetime
 from decimal import Decimal
-from enum import Enum as PyEnum
 from typing import Any
 
 from sqlalchemy import (
     CheckConstraint,
-    Enum,
     ForeignKey,
     ForeignKeyConstraint,
     String,
@@ -35,7 +33,7 @@ from sqlalchemy.orm import (
     relationship,
 )
 
-from opensumma.db import Base, TimestampMixin
+from opensumma.db import Base, TimestampMixin, enum_check, enum_column
 from opensumma.kernel.enums import (
     LEDGER_STATUSES,
     AccountType,
@@ -56,30 +54,6 @@ CODE_LENGTH = 32
 NAME_LENGTH = 200
 
 
-def _enum_column(enum_type: type[PyEnum]) -> Enum:
-    """An enum column stored as portable text.
-
-    PostgreSQL native enum types are avoided: altering one later is awkward and
-    SQLite has no equivalent, so the two backends would diverge. The allowed
-    values are constrained by ``_enum_check`` rather than by the type itself,
-    because a type-generated CHECK is emitted both by the type and by Alembic's
-    rendering of it, which produces duplicate constraints with the same name.
-    """
-    return Enum(
-        enum_type,
-        native_enum=False,
-        create_constraint=False,
-        validate_strings=True,
-        values_callable=lambda members: [member.value for member in members],
-    )
-
-
-def _enum_check(column: str, enum_type: type[PyEnum]) -> CheckConstraint:
-    """Restrict ``column`` to the values of ``enum_type`` at the database level."""
-    allowed = ", ".join(f"'{member.value}'" for member in enum_type)
-    return CheckConstraint(f"{column} IN ({allowed})", name=f"{column}_is_valid")
-
-
 class Account(TimestampMixin, Base):
     """A node in the chart of accounts.
 
@@ -94,15 +68,15 @@ class Account(TimestampMixin, Base):
         CheckConstraint(
             "parent_id IS NULL OR parent_id <> id", name="parent_is_not_self"
         ),
-        _enum_check("account_type", AccountType),
-        _enum_check("normal_balance", NormalBalance),
+        enum_check("account_type", AccountType),
+        enum_check("normal_balance", NormalBalance),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     code: Mapped[str] = mapped_column(String(CODE_LENGTH), unique=True)
     name: Mapped[str] = mapped_column(String(NAME_LENGTH))
-    account_type: Mapped[AccountType] = mapped_column(_enum_column(AccountType))
-    normal_balance: Mapped[NormalBalance] = mapped_column(_enum_column(NormalBalance))
+    account_type: Mapped[AccountType] = mapped_column(enum_column(AccountType))
+    normal_balance: Mapped[NormalBalance] = mapped_column(enum_column(NormalBalance))
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("account.id"))
     is_active: Mapped[bool] = mapped_column(default=True)
 
@@ -147,7 +121,7 @@ class AccountingPeriod(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("length(code) > 0", name="code_not_empty"),
         CheckConstraint("end_date >= start_date", name="end_not_before_start"),
-        _enum_check("status", PeriodStatus),
+        enum_check("status", PeriodStatus),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -155,7 +129,7 @@ class AccountingPeriod(TimestampMixin, Base):
     start_date: Mapped[date]
     end_date: Mapped[date]
     status: Mapped[PeriodStatus] = mapped_column(
-        _enum_column(PeriodStatus), default=PeriodStatus.OPEN
+        enum_column(PeriodStatus), default=PeriodStatus.OPEN
     )
 
     @property
@@ -245,14 +219,14 @@ class JournalEntry(TimestampMixin, Base):
             f"OR (status NOT IN ({_LEDGER_STATUSES}) AND posted_at IS NULL)",
             name="posted_at_matches_status",
         ),
-        _enum_check("status", JournalEntryStatus),
+        enum_check("status", JournalEntryStatus),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     entry_date: Mapped[date] = mapped_column(index=True)
     description: Mapped[str] = mapped_column(String(DESCRIPTION_LENGTH))
     status: Mapped[JournalEntryStatus] = mapped_column(
-        _enum_column(JournalEntryStatus), default=JournalEntryStatus.DRAFT
+        enum_column(JournalEntryStatus), default=JournalEntryStatus.DRAFT
     )
     posted_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
     reversal_of_id: Mapped[int | None] = mapped_column(

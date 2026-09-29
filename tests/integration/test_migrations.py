@@ -65,3 +65,8 @@ def test_postgresql_sql_can_be_generated_offline() -> None:
         "CREATE TABLE journal_line_dimension"
     )
     assert "CREATE INDEX ix_journal_entry_entry_date" in sql
+    assert "CREATE TABLE accounting_object" in sql
+    assert "data JSON NOT NULL" in sql
+    assert sql.index("CREATE TABLE journal_entry") < sql.index(
+        "CREATE TABLE accounting_object_entry"
+    )

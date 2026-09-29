@@ -1,6 +1,6 @@
 # Accounting Model
 
-**Status:** Phases 1 to 3 are implemented; later phases are still specification.
+**Status:** Phases 1 to 4 are implemented; later phases are still specification.
 Each section names the phase that implements it.
 
 ## Invariants
@@ -69,6 +69,10 @@ column.
   naive values going in and re-attaches UTC coming out, because SQLite drops `tzinfo`
   silently and would otherwise return naive datetimes that no longer equal what was
   written. Ruff's `DTZ` rules keep naive `datetime` calls out of the source.
+- `ensure_utc()` is the single definition of an acceptable timestamp, shared by the
+  column and by services that take one, such as an Accounting Object's
+  `occurred_at`: an aware `datetime`, normalised to UTC. A naive one is refused
+  rather than assumed to be UTC.
 - Accounting dates, such as a period's start or an entry's accounting date, are plain
   `date` values. A posting belongs to an accounting date, not to an instant.
 
@@ -305,14 +309,134 @@ expense accounts to zero, so the same calculation remains correct without change
 
 ## Accounting Objects (Phase 4)
 
-An Accounting Object represents a business event or accounting-relevant document, such
-as a vendor bill, customer invoice, payment, or bank transaction. Its fields are `id`,
-`object_type`, `status`, `occurred_at`, `source`, `entity_id`, `data`, `created_at`, and
-`updated_at`.
+Implemented in `opensumma.objects`.
 
-`data` holds flexible business context as JSON. Accounting truth (accounts, journal
-lines, periods, the ledger) stays strictly relational and validated. Objects affect the
-ledger only through journal entries, which go through normal validation.
+An Accounting Object is a business document or event with accounting relevance: a
+vendor bill, a customer invoice, a payment, a bank transaction. It is context for
+accounting, not accounting truth. No report reads it, and it affects the ledger only
+through journal entries that the kernel validates and posts.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Identifier |
+| `object_type` | One of the types below |
+| `status` | `OBSERVED` or `VOIDED`; see [Status](#status) |
+| `occurred_at` | When it happened in the business: a timezone-aware UTC timestamp, required and never defaulted |
+| `source` | Where it was observed, such as `email`, `bank_feed`, or `vendor_portal` |
+| `entity_id` | The counterparty it concerns (a vendor, customer, or employee), if any |
+| `data` | Business context as JSON; see [Business data](#business-data) |
+| `created_at`, `updated_at` | When it was recorded and last changed here |
+
+Object types are lowercase, as agents read and write them: `vendor_bill`,
+`customer_invoice`, `customer_payment`, `vendor_payment`, `bank_transaction`,
+`expense`, `purchase_order`, `sales_order`, `contract`, `journal_entry` (a request
+for a manual entry, such as an accrual, as a document in its own right), and
+`reconciliation`. The list is closed and constrained in the database, like the
+kernel's vocabularies.
+
+### Status
+
+An object is `OBSERVED` from the moment it is recorded and may later be `VOIDED`.
+The workflow engine (Phase 5) adds the states in between.
+
+Whether an object is recorded in the ledger is never a stored status. It is derived
+from the journal entries that record it (see [Accounting impact](#accounting-impact)),
+so an object cannot claim to be posted when the ledger says otherwise.
+
+### Business data
+
+- `data` is a JSON object. It may hold strings, integers that fit 64 bits, booleans,
+  null, arrays, and nested objects.
+- **Floats are refused**, and so is `Decimal`. A JSON number with a fraction comes
+  back as a binary float, which must never stand in for an amount. Amounts are
+  written as strings, such as `"1200.00"`, and read with `Decimal` where they are
+  used. The `BusinessData` column type enforces this on every write through
+  SQLAlchemy, bulk statements included; `ensure_business_data()` is the single
+  definition of what is acceptable, with the path to any bad value in its message.
+- Values JSON would not return exactly, such as tuples, sets, dates, and non-string
+  keys, are refused rather than converted.
+- Data is copied on the way in, so later changes to the caller's dictionary do not
+  alter what was validated. It is replaced rather than edited in place: SQLAlchemy
+  does not notice a change made inside a JSON value, so assign a new value.
+- Top-level string fields are queryable, portably on SQLite and PostgreSQL:
+  `search_accounting_objects(data={"invoice_number": "INV-1001"})`.
+- Amounts in business data never reach a report. If a bill arrives twice, the
+  objects' data claims the amount twice; the ledger records what was posted.
+
+### Business events
+
+An `AccountingEvent` is something that happened to an object in the business: a
+bill `received` or `disputed`, goods on a purchase order `goods_received`, a contract
+`signed`. It has an `event_type` (lowercase snake_case, from an open vocabulary), an
+`occurred_at` in business time, a `source`, JSON `data`, and a `created_at` recording
+when it was entered here. An object's own `occurred_at` and `source` describe how it
+came into being; its events are what happened to it afterwards, in business-time
+order.
+
+Three kinds of event are kept apart:
+
+| Kind | Records | Phase |
+| --- | --- | --- |
+| Business event | Something that happened in the world | 4 |
+| Workflow state | Where the system is in processing an object | 5 |
+| Audit event | Who did what in the system, and why | 6 |
+
+Business events are facts, so they are never changed or deleted; a mistaken one is
+superseded by a later event. A voided object can still receive events, because the
+world does not stop when an object is withdrawn.
+
+### Accounting impact
+
+An object is linked to the journal entries that record its accounting impact. The
+link is many-to-many: a bill may be recorded by an entry and later by its
+correction, and one payment entry may settle two bills.
+
+- **The link points from objects to entries.** The kernel's tables hold no reference
+  to objects, so linking changes nothing in the ledger, a posted entry can be linked
+  after the fact, and the kernel remains usable without this layer.
+- **Entries are made by the kernel.** `create_journal_entry_for_object` records the
+  accounting decision as a draft through `create_journal_entry`, so the recording
+  rules apply, and links it. Posting is the kernel's `post_journal_entry`, with its
+  posting rules. There is no other way from an object to the ledger.
+- **Impact is derived.** `accounting_impact` collects the linked entries and every
+  reversal of them, linked or not, and reads what they posted through the ledger
+  (`posted_activity(entry_ids=...)`). An entry and its reversal therefore net to
+  nothing for the object as they do in the ledger. Drafts and voided entries
+  contribute nothing, and `has_net_impact` says whether the ledger still carries a
+  balance for the object.
+- **Impact is per entry, not apportioned.** A payment entry that settles two bills
+  appears in full in each bill's impact.
+- **Links are permanent history.** A wrong entry is reversed or voided, never
+  unlinked, and the database refuses to delete a linked draft.
+
+### Voiding
+
+An object is voided, never deleted: a duplicate bill stays on record as a withdrawn
+duplicate.
+
+- An object can be voided only when the ledger no longer carries it: no linked entry
+  that could still be posted, and a net impact of zero on every account. Drafts are
+  voided and posted entries reversed through the kernel first. Voiding an object
+  therefore never removes anything from the ledger.
+- A voided object is final. It cannot change and no entry can be linked to it, which
+  the session hooks enforce as well as the services.
+- The kernel does not know about objects, so it does not stop a reversal of a
+  reversal from reinstating an entry that records a voided object. The object's
+  `accounting_impact` would then show `has_net_impact`, which is how such a
+  contradiction is detected.
+
+### Why objects cannot bypass validation
+
+1. The kernel never imports this layer, which a test checks, so no report can read an
+   object.
+2. The only way from an object to the ledger is a journal entry that the kernel
+   records, validates, and posts.
+3. No ledger state is stored on an object; its impact is derived from the ledger.
+4. Voiding an object cannot remove its impact; only kernel reversals can.
+5. Object history is guarded below the services, on every session: objects are never
+   deleted, events and links are never changed or deleted, voided objects are final,
+   and bulk writes to these tables are refused because they would bypass the flush
+   hook.
 
 ## Settled decisions
 
@@ -328,24 +452,36 @@ ledger only through journal entries, which go through normal validation.
 | The ledger | Posted journal lines, not a separate copied table |
 | Database triggers for immutability | Not used; session hooks enforce it (below) |
 | Report dates | Always explicit; a report never depends on today's date |
+| Companies | One company per database; no table carries a company id |
+| `entity_id` on Accounting Objects | The counterparty (vendor, customer, employee), not the company |
+| Object status and the ledger | Status says whether an object stands; whether it is recorded is derived from its entries |
+| Floats in business data | Refused; amounts are strings such as `"1200.00"` |
+| Object to journal entry | A many-to-many link owned by the object layer; kernel tables unchanged |
+| Deleting objects | Never; objects are voided, events and links are permanent |
 
 ## Open design decisions
 
 These should be settled before or during the phase named.
 
-1. **Multiple entities (Phase 4 or later).** There is one implicit company. Accounting
-   Objects carry an `entity_id`, and the dataset generator produces one company at a
-   time. Whether companies share a database or each gets its own is undecided.
-2. **Sequential period close (Phase 5).** Closing a period does not require earlier
+1. **Sequential period close (Phase 5).** Closing a period does not require earlier
    periods to be closed, and reopening is unrestricted. Both belong with the workflow
    engine and its permissions rather than with the kernel.
-3. **Required dimensions (Phase 9 or later).** Whether a dimension may be mandatory,
+2. **Required dimensions (Phase 9 or later).** Whether a dimension may be mandatory,
    globally or per account, is still open. The general ledger shows each line's
    dimensions, but no report is broken down by them yet. The dataset generator and the
    "wrong department" benchmark tasks will show which rule is useful.
-4. **Closing entries (Phase 5).** Year-end close, which moves net income into retained
+3. **Closing entries (Phase 5).** Year-end close, which moves net income into retained
    earnings, belongs with period close. Until then the balance sheet carries net income
    as `unclosed_net_income`.
+4. **Counterparty master data (Phase 8 or 9).** `entity_id` is an opaque identifier
+   today. A table of vendors and customers would let an unknown counterparty be
+   rejected, which the "missing vendor" error injection needs.
+5. **Typed business data (Phase 9).** Whether each object type requires fields, such
+   as a vendor bill's invoice number and amount, is open. The dataset generator will
+   show what each type needs.
+6. **Settlement (Phase 8).** Which payment settles which bill, and for how much, is
+   what `get_open_ap` and `get_open_ar` need. Links to journal entries do not express
+   it; that needs a relationship between objects, with amounts.
 
 Database triggers for immutability were decided against in Phase 3. CLAUDE.md allows
 database-specific SQL only where it is unavoidable, and here it is avoidable: the only

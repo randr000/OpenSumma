@@ -10,7 +10,7 @@ in [progress.md](../progress.md).
 | 1 | Chart of accounts, dimensions, accounting periods | Complete |
 | 2 | Journal entries and deterministic validation | Complete |
 | 3 | Immutable ledger and financial reports | Complete |
-| 4 | Accounting Object model and event model | Not started |
+| 4 | Accounting Object model and event model | Complete |
 | 5 | Workflow / state machine | Not started |
 | 6 | Audit / event log | Not started |
 | 7 | FastAPI REST interface | Not started |

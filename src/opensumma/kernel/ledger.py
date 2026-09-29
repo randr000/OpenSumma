@@ -95,15 +95,19 @@ def posted_activity(
     start: date | None = None,
     end: date | None = None,
     account_codes: Iterable[str] | None = None,
+    entry_ids: Iterable[int] | None = None,
 ) -> dict[str, Activity]:
     """Posted debits and credits per account code, for entries dated in range.
 
-    Both bounds are inclusive and either may be omitted. Accounts with no posted
-    lines in the range are absent from the result.
+    Both bounds are inclusive and either may be omitted. ``entry_ids`` restricts
+    the result to those journal entries; any of them not in the ledger contribute
+    nothing. Accounts with no posted lines in the range are absent from the result.
     """
     where = _ledger_filter(start, end)
     if account_codes is not None:
         where.append(Account.code.in_(sorted(set(account_codes))))
+    if entry_ids is not None:
+        where.append(JournalEntry.id.in_(sorted(set(entry_ids))))
     return _activity(session, where)
 
 

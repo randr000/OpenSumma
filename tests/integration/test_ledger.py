@@ -224,3 +224,16 @@ def test_the_ledger_only_ever_grows(books: Session) -> None:
     books.rollback()
     still_holds_everything()
     assert len(snapshots[-1]) == 6
+
+
+def test_activity_can_be_restricted_to_given_entries(books: Session) -> None:
+    post(books, date(2026, 1, 5), dr("6100", "100.00"), cr("1111", "100.00"))
+    rent = post(books, date(2026, 1, 6), dr("6200", "200.00"), cr("1111", "200.00"))
+    draft = record(books, date(2026, 1, 7), dr("6300", "300.00"), cr("1111", "300.00"))
+    books.flush()
+
+    assert posted_activity(books, entry_ids=[rent.id, draft.id]) == {
+        "6200": Activity(debits=money("200.00")),
+        "1111": Activity(credits=money("200.00")),
+    }
+    assert posted_activity(books, entry_ids=[]) == {}

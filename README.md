@@ -134,6 +134,87 @@ with Session(create_engine(url)) as session:
     print(aws.status.value, reversal.status.value)  # REVERSED POSTED
 ```
 
+## Accounting Objects
+
+Business documents such as vendor bills, invoices, and payments are Accounting
+Objects (`opensumma.objects`). They carry business context as JSON and a history of
+business events, and they reach the ledger only through journal entries that the
+kernel validates and posts. Continuing the example above:
+
+```python
+from datetime import UTC, datetime
+
+from opensumma.kernel import get_journal_entry
+from opensumma.objects import (
+    ObjectHasAccountingImpactError,
+    accounting_impact,
+    create_accounting_object,
+    create_journal_entry_for_object,
+    record_accounting_event,
+    search_accounting_objects,
+    void_accounting_object,
+)
+
+with Session(create_engine(url)) as session:
+    # A bill arrives. Business data is JSON; amounts are strings, never floats.
+    bill = create_accounting_object(
+        session,
+        object_type="vendor_bill",
+        occurred_at=datetime(2026, 3, 20, 9, 30, tzinfo=UTC),
+        source="email",
+        entity_id="V-AWS",
+        data={"invoice_number": "INV-2002", "amount": "80.00"},
+    )
+    record_accounting_event(
+        session,
+        bill,
+        event_type="approved_for_payment",
+        occurred_at=datetime(2026, 3, 21, 14, 0, tzinfo=UTC),
+        source="email",
+    )
+
+    # Its accounting impact is a journal entry, validated and posted by the kernel.
+    entry = create_journal_entry_for_object(
+        session,
+        bill,
+        entry_date=date(2026, 3, 20),
+        description="AWS INV-2002",
+        lines=[
+            LineInput("5200", debit=Decimal("80.00")),
+            LineInput("2110", credit=Decimal("80.00")),
+        ],
+    )
+    post_journal_entry(session, entry)
+    session.commit()
+    print(accounting_impact(session, bill).has_net_impact)  # True
+
+    # The same bill arrives again; its business data gives it away.
+    duplicate = create_accounting_object(
+        session,
+        object_type="vendor_bill",
+        occurred_at=datetime(2026, 3, 22, 8, 0, tzinfo=UTC),
+        source="vendor_portal",
+        entity_id="V-AWS",
+        data={"invoice_number": "INV-2002", "amount": "80.00"},
+    )
+    matches = search_accounting_objects(
+        session, entity_id="V-AWS", data={"invoice_number": "INV-2002"}
+    )
+    print(len(matches))  # 2
+    void_accounting_object(session, duplicate)  # it never reached the ledger
+
+    # An object the ledger still carries cannot be voided away; reverse it first.
+    try:
+        void_accounting_object(session, bill)
+    except ObjectHasAccountingImpactError as error:
+        print(error.entry_ids == (entry.id,))  # True
+    reverse_journal_entry(session, entry, entry_date=date(2026, 3, 31))
+    void_accounting_object(session, bill)
+    session.commit()
+    print(bill.status.value, get_journal_entry(session, entry.id).status.value)
+    # VOIDED REVERSED
+```
+
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md): layers, boundaries, and infrastructure decisions

@@ -33,6 +33,21 @@ def ensure_date(value: object) -> date:
     return value
 
 
+def ensure_utc(value: object) -> datetime:
+    """Return ``value`` as a UTC timestamp, or raise.
+
+    A naive ``datetime`` is refused rather than assumed to be UTC: which instant it
+    names depends on a time zone nobody recorded.
+    """
+    if not isinstance(value, datetime):
+        raise TypeError(f"a timestamp must be a datetime, not {type(value).__name__}")
+    if value.tzinfo is None:
+        raise ValueError(
+            f"{value} is naive; accounting timestamps must be timezone-aware UTC"
+        )
+    return value.astimezone(UTC)
+
+
 class UtcDateTime(TypeDecorator[datetime]):
     """A timezone-aware timestamp, normalised to UTC."""
 
@@ -44,11 +59,7 @@ class UtcDateTime(TypeDecorator[datetime]):
     ) -> datetime | None:
         if value is None:
             return None
-        if value.tzinfo is None:
-            raise ValueError(
-                f"{value} is naive; accounting timestamps must be timezone-aware UTC"
-            )
-        return value.astimezone(UTC)
+        return ensure_utc(value)
 
     def process_result_value(
         self, value: datetime | None, dialect: Dialect

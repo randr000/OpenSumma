@@ -41,7 +41,10 @@ semantic tools and workflows and never get unrestricted SQL access.
 
 Dependency rules:
 
-- Dependencies point downward only.
+- Dependencies point downward only. The Accounting Object layer (`opensumma.objects`)
+  sits above the accounting kernel and depends on it; the kernel never imports it, and
+  `tests/unit/test_layering.py` fails if it does. That is what guarantees no report can
+  read an Accounting Object.
 - The domain services, accounting kernel, and workflow engine never import FastAPI or MCP.
 - The accounting kernel is usable directly from Python, with no server running.
 - REST and MCP are thin adapters over the same application API. Neither contains
@@ -59,13 +62,13 @@ Persistence details (table names, keys, SQL) do not leak into the agent interfac
 
 ## Package layout
 
-Current state (Phase 3):
+Current state (Phase 4):
 
 ```text
 src/opensumma/
-    db.py               declarative Base, TimestampMixin, engine creation, init_db()
+    db.py               declarative Base, TimestampMixin, enum columns, engine, init_db()
     money.py            Money column type (integer cents), round_money(), ensure_money()
-    utc.py              UtcDateTime column type and utcnow()
+    utc.py              UtcDateTime column type, ensure_utc(), ensure_date(), utcnow()
     kernel/             the accounting kernel
         enums.py            account types, normal balances, statuses, issue codes
         errors.py           the accounting rules the kernel can reject
@@ -77,6 +80,14 @@ src/opensumma/
         ledger.py           the ledger: posted lines, activity, and account balances
         reports.py          trial balance, general ledger, income statement, balance sheet
         seed.py             default chart of accounts and dimensions
+    objects/            Accounting Objects, above the kernel
+        enums.py            object types and statuses
+        errors.py           the rules the object layer can reject
+        data.py             BusinessData JSON column type, ensure_business_data()
+        models.py           objects, business events, links to journal entries, and the
+                            session hooks guarding their history
+        services.py         record, search, and void objects; record events; link
+                            entries; derive accounting impact
     migrations/         Alembic environment and revisions, shipped inside the package
 tests/
     unit/           pure logic, no database
@@ -92,6 +103,12 @@ above itself. Reports read posted data only through `ledger.py`, which is what m
 
 `opensumma.kernel` re-exports everything a caller needs, so importing it is both the
 public API and what registers the persistence models on `Base.metadata`.
+`opensumma.objects` does the same for the object layer, and imports the kernel.
+
+`objects/` depends on the kernel's public API and on nothing above itself. It links
+objects to journal entries from its own table, so the kernel's tables are unchanged
+and the kernel works without it. An object's accounting impact is read through
+`ledger.py` like everything else derived from the ledger.
 
 ### Protection below the services
 
@@ -108,6 +125,13 @@ SQLAlchemy's `Session` class, so they apply to every session in the process:
 
 Details are in [accounting-model.md](accounting-model.md#immutability).
 
+`objects/models.py` guards object history in the same way, on every session:
+objects are never deleted, business events and links to journal entries are never
+changed or deleted, a voided object cannot change or gain entries, and bulk writes to
+the object tables are refused. The `BusinessData` column type refuses floats on every
+write, bulk statements included. Details are in
+[accounting-model.md](accounting-model.md#accounting-objects-phase-4).
+
 Modules for later layers are added in the phase that needs them (see
 [roadmap.md](roadmap.md)). There are no empty placeholder packages.
 
@@ -122,6 +146,9 @@ Modules for later layers are added in the phase that needs them (see
   optional for a ledger.
 - Monetary columns use `opensumma.money.Money`: exact integer cents, never floats. See
   [accounting-model.md](accounting-model.md#money).
+- Business data uses `opensumma.objects.data.BusinessData`, a portable `JSON` column
+  that refuses floats. Its fields are queried with SQLAlchemy's JSON operators, which
+  render for SQLite and PostgreSQL alike.
 - Timestamp columns use `opensumma.utc.UtcDateTime`: timezone-aware UTC in and out, on
   every backend.
 - Enum columns are portable text with an explicit CHECK constraint rather than a native
@@ -156,7 +183,9 @@ Modules for later layers are added in the phase that needs them (see
 Workflow for schema changes:
 
 1. Change or add a persistence model. A new model module must be reachable from
-   `opensumma.kernel`, which `migrations/env.py` imports, or autogenerate will not see it.
+   `opensumma.objects`, which `migrations/env.py` imports (it imports the kernel in
+   turn), or autogenerate will not see it. A new application column type needs a
+   rendering rule in `env.py` too, so migrations record the physical type.
 2. `alembic revision --autogenerate -m "describe the change"`
 3. Review the generated revision. Autogenerate is a starting point, not a guarantee.
 4. Run `pytest`. `test_models_match_migrations` fails if models and migrations disagree.

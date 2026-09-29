@@ -8,10 +8,11 @@ its own databases.
 
 import os
 from datetime import datetime
+from enum import Enum as PyEnum
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, MetaData, event
+from sqlalchemy import CheckConstraint, Engine, Enum, MetaData, event
 from sqlalchemy import create_engine as sa_create_engine
 from sqlalchemy.engine.interfaces import DBAPIConnection
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -37,6 +38,30 @@ class Base(DeclarativeBase):
     """Declarative base for all persistence models."""
 
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
+
+
+def enum_column(enum_type: type[PyEnum]) -> Enum:
+    """An enum column stored as portable text.
+
+    PostgreSQL native enum types are avoided: altering one later is awkward and
+    SQLite has no equivalent, so the two backends would diverge. The allowed
+    values are constrained by ``enum_check`` rather than by the type itself,
+    because a type-generated CHECK is emitted both by the type and by Alembic's
+    rendering of it, which produces duplicate constraints with the same name.
+    """
+    return Enum(
+        enum_type,
+        native_enum=False,
+        create_constraint=False,
+        validate_strings=True,
+        values_callable=lambda members: [member.value for member in members],
+    )
+
+
+def enum_check(column: str, enum_type: type[PyEnum]) -> CheckConstraint:
+    """Restrict ``column`` to the values of ``enum_type`` at the database level."""
+    allowed = ", ".join(f"'{member.value}'" for member in enum_type)
+    return CheckConstraint(f"{column} IN ({allowed})", name=f"{column}_is_valid")
 
 
 class TimestampMixin:

@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
+import opensumma.objects  # noqa: F401  (registers the object models on Base.metadata)
 from opensumma.db import Base, create_engine
 from opensumma.kernel import (
     create_calendar_year_periods,

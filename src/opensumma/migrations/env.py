@@ -8,9 +8,11 @@ from alembic.autogenerate.api import AutogenContext
 from sqlalchemy import create_engine
 from sqlalchemy.pool import NullPool
 
-import opensumma.kernel  # noqa: F401  (registers the kernel models on Base.metadata)
+# Registers the kernel and object models on Base.metadata; objects import the kernel.
+import opensumma.objects  # noqa: F401
 from opensumma.db import Base, get_database_url
 from opensumma.money import Money
+from opensumma.objects.data import BusinessData
 from opensumma.utc import UtcDateTime
 
 config = context.config
@@ -34,6 +36,8 @@ def _render_item(
         return "sa.BigInteger()"
     if type_ == "type" and isinstance(obj, UtcDateTime):
         return "sa.DateTime(timezone=True)"
+    if type_ == "type" and isinstance(obj, BusinessData):
+        return "sa.JSON()"
     return False
 
 

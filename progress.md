@@ -2,11 +2,11 @@
 
 ## Current Phase:
 
-Phase 3 — Immutable ledger and financial reports
+Phase 4 — Accounting Object model and event model
 
 ## Current Status:
 
-Complete. All Phase 3 acceptance criteria are satisfied. Phase 4 has not started.
+Complete. All Phase 4 acceptance criteria are satisfied. Phase 5 has not started.
 
 ## Completed:
 
@@ -25,33 +25,36 @@ reported together with stable issue codes, posting, voiding, and reversal, and s
 hooks that stop any change to a recorded entry and any unbalanced entry reaching the
 ledger.
 
-Phase 3 acceptance criteria:
+Phase 3 — immutable ledger and financial reports. The ledger is the posted journal
+lines themselves; trial balance, general ledger, income statement, and balance sheet
+all read it through `ledger.py`, and the accounting equation holds with net income
+not yet closed carried into equity.
 
-- [x] Immutable ledger exists (`opensumma.kernel.ledger`: every line of every POSTED or
-  REVERSED entry; immutable and append-only because posted entries are)
-- [x] Trial balance works (net balances in the debit or credit column, zero balances left
-  off, equal column totals)
-- [x] General ledger works (lines by date, entry, and line, between an opening balance
-  brought forward and a closing balance, with a running balance, memos, and dimensions)
-- [x] Income statement works (revenue and expenses for a date range, rolled up the
-  account hierarchy, contra revenue shown as a reduction)
-- [x] Balance sheet works (assets, liabilities, and equity as of a date, contra assets
-  shown as reductions, net income not yet closed carried into equity)
-- [x] Accounting equation holds (`Assets = Liabilities + Equity + unclosed net income`,
-  checked by `BalanceSheet.is_balanced` and by tests at several dates)
-- [x] Financial reports derive from posted ledger (reports read posted data only through
-  the ledger module; drafts, voided entries, and Accounting Objects never reach them)
+Phase 4 acceptance criteria:
 
-The acceptance test posts a realistic January (capital, equipment, credit sales, a
-customer payment, a sales return, rent, an unpaid bill, depreciation, payroll, and a
-misposting that is reversed) alongside a draft and a voided entry, and checks every
-report against figures worked out by hand. It doubles as a worked example for user
-acceptance testing.
+- [x] AccountingObject exists (`opensumma.objects`: the specified fields, eleven object
+  types, OBSERVED and VOIDED statuses; never deleted)
+- [x] JSON business data supported (portable JSON column; strings, 64-bit integers,
+  booleans, null, arrays, and objects round-trip exactly; floats refused on every
+  write path; top-level string fields queryable)
+- [x] Business events supported (`AccountingEvent`: typed, business-time ordered,
+  append-only, distinct from workflow states and audit events)
+- [x] Object-to-accounting-impact relationship exists (a many-to-many, permanent link
+  to journal entries; `accounting_impact` derives what the ledger holds for an
+  object, reversals included, through the ledger module)
+- [x] Objects cannot bypass accounting validation (the kernel never imports the object
+  layer; entries for objects are created and posted by the kernel; no ledger state is
+  stored on objects; an object the ledger still carries cannot be voided)
 
-A property test builds random years of entries with random fates (posted, drafted,
-voided, or posted and reversed) and checks every report against balances computed
-independently from the generated data. It fails when drafts are allowed into the
-ledger, which was checked by planting exactly that bug.
+The acceptance test records a realistic March: a vendor bill posted to the wrong
+account, reversed, reposted, and paid; the same bill arriving twice and the duplicate
+found through its business data and voided; a purchase order whose goods-received
+event is accrued; an invoice and a proposal that cannot post. Every report figure was
+worked out by hand beforehand, and the test shows the objects' own data claiming an
+amount the ledger never recorded.
+
+A property test writes arbitrary business data to the database and reads it back
+unchanged.
 
 ## In Progress:
 
@@ -59,20 +62,22 @@ Nothing.
 
 ## Next:
 
-Phase 4 — the Accounting Object model and event model: business events such as vendor
-bills and customer invoices as objects with flexible JSON data, linked to the journal
-entries that record their accounting impact, and unable to bypass validation.
+Phase 5 — the workflow engine: states between observed and closed for objects and
+journal entries, validated transitions, agent proposals entering the workflow, human
+approval, and posting restricted to approved entries and to actors allowed to post.
 
 ## Known Issues:
 
-- CI has not run on GitHub yet, because the repository has no remote. The same commands
-  pass locally on Python 3.12 and 3.13.
+- The repository now has a GitHub remote, and `main` was pushed through Phase 3. CI
+  results have not been checked from this machine, which has no `gh` CLI. The same
+  commands pass locally on Python 3.12 and 3.13.
 - There is no license file yet. The project is intended to be open source, but the license
   has not been chosen.
 - Accounts and periods have no delete operation, so a mistyped code can only be
   deactivated. This is deliberate: anything the ledger references must survive.
 - Immutability is enforced in SQLAlchemy sessions, not in the database, so raw SQL on a
-  connection could still alter a posted entry. Triggers were decided against (see
+  connection could still alter a posted entry or rewrite object history. Triggers were
+  decided against (see
   [docs/accounting-model.md](docs/accounting-model.md#open-design-decisions)).
 - The kernel posts from any status that is not yet final. Restricting posting to
   APPROVED entries and to actors with POSTER permission is Phase 5's job.
@@ -81,52 +86,63 @@ entries that record their accounting impact, and unable to bypass validation.
   Phase 5.
 - Offline SQL generation (`alembic upgrade head --sql`) does not work for SQLite past the
   Phase 2 migration, because batch mode must read the live table it rebuilds. It works
-  for PostgreSQL, which is where it is useful, and a test now keeps it working there.
-  **Correction:** the Phase 2 version of this file (commit `0f0de12`) claimed offline
-  mode worked for SQLite. It did not; that check counted CREATE TABLE statements in the
-  output without checking the command's exit code, which was non-zero.
+  for PostgreSQL, where it is useful, and a test keeps it working there.
+- The kernel does not know about objects, so reversing a reversal can reinstate an entry
+  that records a voided object. `accounting_impact` then shows `has_net_impact` for
+  that object, which is how the contradiction is detected; nothing prevents it.
+- Business data changed in place (`obj.data["amount"] = ...`) is not saved, because
+  SQLAlchemy does not see changes inside a JSON value. Assign a new value instead.
+- `entity_id` is an opaque identifier with no counterparty master data behind it, so an
+  unknown vendor is not rejected yet (open decision 4).
+- Voiding an object records no reason. Who voided it and why belongs to the audit log
+  (Phase 6).
+- Data filters in `search_accounting_objects` match top-level fields as text, so a
+  filter of `"3"` also matches a stored integer `3`, on SQLite and PostgreSQL alike.
 
-## Design decisions made in Phase 3:
+## Design decisions made in Phase 4:
 
 Recorded in
-[docs/accounting-model.md](docs/accounting-model.md#the-ledger-and-financial-reports-phase-3).
+[docs/accounting-model.md](docs/accounting-model.md#accounting-objects-phase-4).
 
-1. **The ledger is the posted journal lines, not a copy.** Posted lines are already
-   immutable and append-only, so a separate table would only add a second source of truth
-   to keep in step.
-2. **No database triggers.** CLAUDE.md allows database-specific SQL only where
-   unavoidable, and it is avoidable: the kernel's sessions are the only writers and
-   agents never get SQL access.
-3. **Reports read posted data only through `ledger.py`,** so "reports derive from the
-   ledger" is a property of the code, not a convention.
-4. **Report dates are explicit.** Nothing defaults to today, so a report depends only on
-   the ledger.
-5. **Signs follow the reader's expectation.** Balances are stated in the account's normal
-   direction; statement amounts in the section's, so contra accounts show as reductions.
-   The trial balance uses debit and credit columns.
-6. **Reports include retired accounts** that still hold posted history; omitting them
-   would unbalance the reports.
-
-Also: journal entries are indexed by accounting date, since every report selects by it.
+1. **Objects are a layer above the kernel.** `opensumma.objects` depends on the
+   kernel; the kernel never imports it, which a test enforces. The only kernel change
+   is an `entry_ids` filter on `posted_activity`.
+2. **`entity_id` is the counterparty, not the company.** Only objects carry it, so a
+   company id would have meant nothing on accounts or entries. The dimensions follow
+   NetSuite's (department, location, class), where "entity" is the customer or vendor
+   on a transaction. One company per database settles open decision 1 from Phase 3.
+3. **Business events are separate from workflow states and audit events.** They record
+   what happened in the world, in business time, and are append-only.
+4. **An object's status never claims ledger state.** OBSERVED and VOIDED say whether it
+   stands; whether it is recorded is derived from its entries.
+5. **Objects link to entries from their own table, many-to-many and permanently.**
+   Linking changes nothing in the ledger, and an entry's reversals count toward the
+   object's impact automatically.
+6. **Floats are refused in business data at the column type,** so no write path can
+   put one next to an accounting amount; amounts are strings.
+7. **Voiding needs zero net impact and no pending entries,** so voiding an object can
+   never remove anything from the ledger; a voided object is final.
+8. **Shared helpers moved down a layer:** the enum column helpers into `db.py`, and
+   `ensure_utc()` into `utc.py` as the single definition of an acceptable timestamp.
 
 ## Last Verification:
 
-2026-09-27, on Python 3.12.14 and 3.13.15:
+2026-09-28, on Python 3.12.14 and 3.13.15:
 
-- `pytest`: 271 passed (62 unit, 186 integration, 23 acceptance), including 175 generated
-  Hypothesis scenarios
+- `pytest`: 354 passed (89 unit, 236 integration, 29 acceptance), including 275
+  generated Hypothesis scenarios
 - `ruff check .`: passed
 - `ruff format --check .`: passed
 - `mypy` (strict): passed
-- The package built as a wheel containing `ledger.py`, `reports.py`, and all four
-  migrations, installed non-editably into a fresh Python 3.13 environment, and the whole
-  suite passed against the installed package.
-- `alembic upgrade head` applied all four revisions, `alembic check` reported no drift,
-  and `alembic downgrade base` unwound all four. Offline `--sql` generation works for
-  PostgreSQL and is now tested; for SQLite it stops at the Phase 2 migration (see Known
-  Issues).
-- Mutation checks: with drafts and voided entries let into the ledger, both the report
-  property test and the targeted report test fail; with the Phase 2 migration's
-  constraint moved after the table that needs it, the new offline test fails.
-- Every figure in the acceptance test was worked out by hand before the test ran, and the
-  README example was executed and printed exactly what its comments claim.
+- The package built as a wheel containing `opensumma/objects/` and all five
+  migrations, installed non-editably into a fresh Python 3.13 environment, and the
+  whole suite, Ruff, and mypy passed against the installed package.
+- `alembic upgrade head` applied all five revisions, `alembic check` reported no drift,
+  and `alembic downgrade base` unwound them. Offline PostgreSQL SQL now includes the
+  object tables, and a test checks it.
+- Mutation checks, each caught by the suite and then undone: the kernel importing the
+  object layer; voiding that ignores net ledger impact; impact that ignores
+  reversals; a business-data column that accepts floats; voided objects left
+  unguarded in the flush hook; and the ledger's entry filter letting drafts in.
+- Every figure in the acceptance test was worked out by hand before the test ran, and
+  both README examples were executed and printed exactly what their comments claim.
