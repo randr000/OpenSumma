@@ -1,4 +1,4 @@
-"""Request and response bodies for the REST interface.
+"""Request and response bodies for the REST and MCP interfaces.
 
 Amounts cross the interface as strings, such as ``"120.50"``, in both directions: a
 JSON number is refused, because it would arrive as a binary float. Requests forbid
@@ -13,6 +13,9 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 Amount = Annotated[str, StringConstraints(pattern=r"^-?\d+(\.\d+)?$")]
+
+# The most audit events one read returns; read further pages with ``after``.
+AUDIT_PAGE_LIMIT = 1000
 
 
 class Request(BaseModel):

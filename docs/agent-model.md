@@ -3,8 +3,9 @@
 **Status:** actors, permissions, the workflow operations behind the mutating tools,
 and the audit log are implemented (Phases 5 and 6, `opensumma.workflow`), and so are
 the kernel and object operations behind the read-only tools (Phases 2 to 4). Every
-tool is reachable over the REST interface (Phase 7, `opensumma.api`); the MCP
-interface is Phase 8, the benchmark Phase 10, and example agents Phase 11.
+tool is reachable over the REST interface (Phase 7, `opensumma.api`) and as an MCP
+tool (Phase 8, `opensumma.mcp`); the benchmark is Phase 10, and example agents
+Phase 11.
 
 ## Principle
 
@@ -28,7 +29,7 @@ superuser, and an approver who should also post needs POSTER too.
 
 | Permission | Allows |
 | --- | --- |
-| READ_ONLY | Querying accounts, balances, ledgers, reports, objects, and history. Enforced by the interfaces (REST since Phase 7), because reading from Python is not gated |
+| READ_ONLY | Querying accounts, balances, ledgers, reports, objects, and history. Enforced by the interfaces (REST since Phase 7, MCP since Phase 8), because reading from Python is not gated |
 | PROPOSER | Observing, extracting, and classifying objects; proposing, validating, and submitting entries; voiding drafts and proposals |
 | APPROVER | Approving or rejecting pending entries; voiding entries under review or approved; voiding objects |
 | POSTER | Posting approved entries and reversing posted ones |
@@ -68,8 +69,9 @@ get_accounting_object   search_accounting_objects
 get_audit_history
 ```
 
-`get_open_ap` and `get_open_ar` wait on settlement between payments and bills;
-`get_audit_history` is backed by `audit_history`.
+`get_open_ap` and `get_open_ar` wait on settlement between payments and bills, and
+`search_transactions` has not been defined yet; none of the three is served by
+either interface. `get_audit_history` is backed by `audit_history`.
 
 Mutating (the permission each requires):
 
@@ -117,12 +119,39 @@ income statements and balance sheets at `/reports/income-statement` and
 `/reports/balance-sheet`. `search_transactions`, `get_open_ap`, and `get_open_ar`
 have no endpoint yet.
 
+Over MCP (Phase 8), the tools carry their own names. An agent's host starts
+`python -m opensumma.mcp` with the agent's API key in `OPENSUMMA_API_KEY`, and the
+server acts as that actor for every call; a workflow with several actors runs one
+server per actor. The server lists 29 tools:
+
+- **Read-only (15), annotated `readOnlyHint`:** `get_chart_of_accounts`,
+  `get_account`, `get_account_balance`, `get_trial_balance`, `get_general_ledger`,
+  `get_journal_entry`, `get_accounting_object`, `search_accounting_objects`, and
+  `get_audit_history` from the specification; and `get_accounting_periods`,
+  `get_dimensions`, `get_counterparties`, `get_income_statement`,
+  `get_balance_sheet`, and `get_ledger` (raw ledger lines) beside them.
+  `search_accounting_objects` takes a `data` filter, such as
+  `{"invoice_number": "INV-2002"}`, for finding duplicate documents.
+- **Mutating (14), each the workflow operation of its name:** the six in the table
+  above, and `reject_journal_entry`, `void_journal_entry`,
+  `observe_accounting_object`, `extract_accounting_object`,
+  `classify_accounting_object`, `void_accounting_object`, `close_period`, and
+  `reopen_period`.
+
+Every mutating tool takes a `reason` and `evidence`, which its schema describes;
+`reject_journal_entry`, `void_journal_entry`, `void_accounting_object`, and
+`reopen_period` require the reason. Every tool is listed to every actor, so an agent
+can attempt what it is not allowed to do, and the refused attempt is audited. A
+refusal is an error result whose structured content is the JSON the audit log
+records; arguments that do not match the schema, including any the tool does not
+declare, are refused before the tool runs.
+
 A refused step raises a specific error: `InvalidTransitionError` (not from this
 state, naming the states it is allowed from), `PermissionDeniedError` (naming the
 permission), `SegregationOfDutiesError`, `CounterpartyRequiredError`,
 `PeriodSequenceError` or `PendingEntriesError` (naming what to deal with first), or
-the kernel's `JournalEntryError` with its issue codes. The REST interface answers
-with the same JSON the audit log records for the refusal.
+the kernel's `JournalEntryError` with its issue codes. The REST and MCP interfaces
+both answer with the same JSON the audit log records for the refusal.
 
 ## Validation results
 

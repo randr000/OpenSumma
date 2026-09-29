@@ -1,12 +1,14 @@
-"""What every request needs: a session, the calling actor, and a unit of work."""
+"""What every request needs: a session and the calling actor.
+
+The unit of work around an action is shared with the MCP interface, in
+``opensumma.interface.work``.
+"""
 
 from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Annotated
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from opensumma.workflow import (
@@ -16,7 +18,6 @@ from opensumma.workflow import (
     authenticate,
     require_permission,
 )
-from opensumma.workflow.audit import REFUSALS
 
 _bearer = HTTPBearer(auto_error=False, description="An actor's API key")
 
@@ -53,26 +54,3 @@ def get_reader(actor: ActorDep) -> Actor:
 
 
 ReaderDep = Annotated[Actor, Depends(get_reader)]
-
-
-@contextmanager
-def unit_of_work(session: Session) -> Iterator[None]:
-    """Commit what an action did, or, if a rule refused it, its audit event.
-
-    A refused action changes nothing but the audit log, so committing keeps the
-    record of the attempt without keeping anything else. Any other failure rolls
-    everything back.
-    """
-    try:
-        yield
-    except REFUSALS:
-        try:
-            session.commit()
-        except SQLAlchemyError:  # the refusal came from a failed flush
-            session.rollback()
-        raise
-    except BaseException:
-        session.rollback()
-        raise
-    else:
-        session.commit()

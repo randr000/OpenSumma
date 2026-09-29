@@ -5,8 +5,9 @@ from datetime import date
 from fastapi import APIRouter
 
 from opensumma import kernel, workflow
-from opensumma.api import schemas, views
-from opensumma.api.dependencies import ActorDep, ReaderDep, SessionDep, unit_of_work
+from opensumma.api.dependencies import ActorDep, ReaderDep, SessionDep
+from opensumma.interface import schemas, views
+from opensumma.interface.work import unit_of_work
 from opensumma.objects import CounterpartyKind, counterparties
 
 router = APIRouter()

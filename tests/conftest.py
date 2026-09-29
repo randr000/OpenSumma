@@ -1,9 +1,14 @@
 import shutil
 from collections.abc import Callable, Iterator
+from contextlib import ExitStack
 from pathlib import Path
+from typing import Any
 
 import pytest
+from anyio.from_thread import BlockingPortal, start_blocking_portal
 from fastapi.testclient import TestClient
+from mcp import Client
+from mcp.types import CallToolResult, Tool
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
@@ -15,6 +20,7 @@ from opensumma.kernel import (
     seed_chart_of_accounts,
     seed_dimensions,
 )
+from opensumma.mcp import create_server
 from opensumma.objects import seed_counterparties
 from opensumma.workflow import (
     Actor,
@@ -185,3 +191,81 @@ def auth(api_template: tuple[Path, dict[str, str]]) -> Callable[[str], dict[str,
     """The request headers that identify an actor of ``API_CAST`` by code."""
     keys = api_template[1]
     return lambda code: {"Authorization": f"Bearer {keys[code]}"}
+
+
+# --- The MCP interface -------------------------------------------------------------
+#
+# A server acts as one actor, so a test that needs several actors connects one
+# client per actor, all to the same fresh copy of the template books above. Clients
+# run on a blocking portal, so tests stay synchronous.
+
+
+class McpCaller:
+    """Calls the MCP tools as one actor, from a synchronous test."""
+
+    def __init__(self, portal: BlockingPortal, client: Client) -> None:
+        self._portal = portal
+        self._client = client
+
+    def call(self, tool: str, **arguments: Any) -> CallToolResult:
+        """The tool's result, whether it was allowed or refused."""
+        result: CallToolResult = self._portal.call(
+            self._client.call_tool, tool, arguments
+        )
+        return result
+
+    def __call__(self, tool: str, **arguments: Any) -> Any:
+        """The tool's structured result; the test fails if it was refused."""
+        result = self.call(tool, **arguments)
+        assert not result.is_error, result.content
+        return result.structured_content
+
+    def refusal(self, tool: str, **arguments: Any) -> dict[str, Any]:
+        """What refused the call; the test fails if it was allowed, or if the
+        arguments never reached the tool."""
+        result = self.call(tool, **arguments)
+        assert result.is_error, result.structured_content
+        refusal: dict[str, Any] | None = result.structured_content
+        assert refusal is not None, result.content
+        return refusal
+
+    def list_tools(self) -> list[Tool]:
+        return self._portal.call(self._client.list_tools).tools
+
+
+class McpServers:
+    """MCP servers over one copy of the books, each acting as one actor."""
+
+    def __init__(
+        self, url: str, keys: dict[str, str], portal: BlockingPortal, stack: ExitStack
+    ) -> None:
+        self.url = url
+        self._keys = keys
+        self._portal = portal
+        self._stack = stack
+        self._callers: dict[str, McpCaller] = {}
+
+    def __call__(self, code: str) -> McpCaller:
+        """A client of the server acting as ``code``, an actor of ``API_CAST``."""
+        if code not in self._callers:
+            self._callers[code] = self.with_key(self._keys[code])
+        return self._callers[code]
+
+    def with_key(self, key: str) -> McpCaller:
+        """A client of a server started with ``key``, whatever it identifies."""
+        server = create_server(self.url, api_key=key)
+        client = self._stack.enter_context(
+            self._portal.wrap_async_context_manager(Client(server))
+        )
+        return McpCaller(self._portal, client)
+
+
+@pytest.fixture
+def mcp_as(
+    api_template: tuple[Path, dict[str, str]], tmp_path: Path
+) -> Iterator[McpServers]:
+    """MCP servers over a fresh copy of the template books: ``mcp_as("agent")``."""
+    path = tmp_path / "books.db"
+    shutil.copyfile(api_template[0], path)
+    with start_blocking_portal() as portal, ExitStack() as stack:
+        yield McpServers(f"sqlite:///{path}", api_template[1], portal, stack)

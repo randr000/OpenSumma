@@ -368,6 +368,77 @@ Amounts are strings, never JSON numbers. Every read needs READ_ONLY; every chang
 a workflow operation, with its permission checks and its audit event. A refusal is
 answered with the same JSON the audit log records for it.
 
+## The MCP server
+
+The same operations are MCP tools (`opensumma.mcp`), so an agent's host can offer
+them to a model directly: 15 read-only tools, such as `get_trial_balance`, and 14
+mutating ones, each the workflow operation of its name, such as
+`propose_journal_entry`. A server acts as one actor, whose API key it reads from
+`OPENSUMMA_API_KEY`, and speaks MCP on stdio. A host launches it from its
+configuration, for example:
+
+```json
+{
+  "mcpServers": {
+    "opensumma": {
+      "command": "/path/to/.venv/bin/python",
+      "args": ["-m", "opensumma.mcp", "--database-url", "sqlite:////path/to/opensumma.db"],
+      "env": {"OPENSUMMA_API_KEY": "osk_..."}
+    }
+  }
+}
+```
+
+The MCP SDK's client can drive it from Python too. Continuing the examples above,
+with the agent's key:
+
+```python
+import asyncio
+import sys
+
+from mcp import Client, StdioServerParameters
+
+
+async def main() -> None:
+    server = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "opensumma.mcp", "--database-url", url],
+        env={"OPENSUMMA_API_KEY": key},
+    )
+    async with Client(server) as client:
+        balance = await client.call_tool(
+            "get_account_balance", {"code": "6700", "as_of": "2026-03-31"}
+        )
+        print(balance.structured_content["balance"])  # 45.00
+
+        entry = await client.call_tool(
+            "propose_journal_entry",
+            {
+                "entry_date": "2026-03-29",
+                "description": "Paper Trail INV-6",
+                "lines": [
+                    {"account": "6700", "debit": "30.00"},
+                    {"account": "2110", "credit": "30.00"},
+                ],
+                "reason": "Same vendor and account as INV-5",
+                "evidence": ["invoice=INV-6"],
+            },
+        )
+        entry_id = entry.structured_content["id"]
+        await client.call_tool("submit_for_approval", {"entry_id": entry_id})
+
+        refused = await client.call_tool("approve_journal_entry", {"entry_id": entry_id})
+        print(refused.is_error, refused.structured_content["permission"])
+        # True APPROVER
+
+
+asyncio.run(main())
+```
+
+Every read needs READ_ONLY and every change is audited, as on the REST API. A
+refusal is an error result carrying the same JSON the audit log records for it, and
+an argument a tool does not declare is refused rather than ignored.
+
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md): layers, boundaries, and infrastructure decisions

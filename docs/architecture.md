@@ -42,18 +42,23 @@ semantic tools and workflows and never get unrestricted SQL access.
 Dependency rules:
 
 - Dependencies point downward only. In packages: `kernel` ← `objects` ← `workflow` ←
-  `api`. The Accounting Object layer sits above the kernel; the workflow engine above
-  both; the REST interface above everything. `tests/unit/test_layering.py` fails if a
-  layer imports one above it, or if any domain layer imports FastAPI, Starlette,
-  uvicorn, Pydantic, or MCP. That is what guarantees no report can read an Accounting
-  Object and the domain never depends on an interface.
+  `interface` ← `api` and `mcp`. The Accounting Object layer sits above the kernel;
+  the workflow engine above both; the REST and MCP interfaces above everything, side
+  by side, sharing `interface`, which presents records and commits actions for both.
+  `tests/unit/test_layering.py` fails if a layer imports one above it, if any domain
+  layer imports FastAPI, Starlette, uvicorn, Pydantic, or MCP, if `interface` imports
+  either interface or its framework, or if either interface imports the other or
+  its framework. That is what guarantees no report can read an Accounting Object and
+  the domain never depends on an interface.
 - The diagram draws the kernel and the workflow engine side by side because they are
   peers in purpose: one decides what is valid, the other who may act and when. In
   code the workflow wraps the kernel, so it sits above it.
 - The domain services, accounting kernel, and workflow engine never import FastAPI or MCP.
 - The accounting kernel is usable directly from Python, with no server running.
-- REST and MCP are thin adapters over the same application API. Neither contains
-  accounting logic, and both are subject to the same validation.
+- REST and MCP are thin adapters over the same application API: the workflow's
+  operations and the kernel's reads, presented through `opensumma.interface`.
+  Neither contains accounting logic, and both are subject to the same validation,
+  permissions, and audit.
 - Every interface an actor can reach goes through the workflow, where actors and
   permissions exist. The kernel and object layer beneath stay unguarded for trusted
   code, such as the dataset generator, which must be able to create the mistakes the
@@ -71,7 +76,7 @@ Persistence details (table names, keys, SQL) do not leak into the agent interfac
 
 ## Package layout
 
-Current state (Phase 7):
+Current state (Phase 8):
 
 ```text
 src/opensumma/
@@ -106,12 +111,21 @@ src/opensumma/
                             append-only
         audit.py            recording audited actions, capturing changes made outside
                             them, reading the log, and verifying its chain
-    api/                the REST interface (FastAPI), above everything else
+        actors.py           actor services, API keys, and the permission check
+        machine.py          the transition tables, and recording transitions
+        entries.py          propose, validate, submit, approve, reject, post, reverse,
+                            and void journal entries
+        accounting_objects.py  observe, extract, classify, and void objects
+        periods.py          close and reopen periods, in order
+    interface/          what the REST and MCP interfaces share
+        schemas.py          request and response models (Pydantic)
+        views.py            domain records as the interfaces present them
+        work.py             the unit of work of one action: commit, keeping refusals'
+                            audit events
+    api/                the REST interface (FastAPI)
         app.py              create_app(): routers, error handlers, /health
-        dependencies.py     the request's session, calling actor, and unit of work
+        dependencies.py     the request's session and calling actor
         errors.py           refusals as HTTP responses
-        schemas.py          request and response bodies (Pydantic)
-        views.py            domain records as the interface presents them
         master_data.py      accounts, balances, periods, dimensions, counterparties
         journal.py          journal entries through the workflow, and the ledger
         reports.py          trial balance, income statement, balance sheet, general
@@ -119,12 +133,12 @@ src/opensumma/
         objects.py          accounting objects through the workflow
         audit.py            the audit log, page by page
         __main__.py         python -m opensumma.api
-        actors.py           actor services and the permission check
-        machine.py          the transition tables, and recording transitions
-        entries.py          propose, validate, submit, approve, reject, post, reverse,
-                            and void journal entries
-        accounting_objects.py  observe, extract, classify, and void objects
-        periods.py          close and reopen periods, in order
+    mcp/                the MCP interface (MCP Python SDK)
+        server.py           create_server(): the tools, their annotations, refusals
+        context.py          the call's session and calling actor
+        read_tools.py       the read-only tools
+        mutating_tools.py   the mutating tools, one per workflow operation
+        __main__.py         python -m opensumma.mcp, on stdio
     migrations/         Alembic environment and revisions, shipped inside the package
 tests/
     unit/           pure logic, no database
@@ -156,6 +170,12 @@ events name actors and the workflow's operations write them; a separate package
 would depend on the workflow and be depended on by it. The transition tables in `machine.py` are data, so the
 rules about when an action is allowed are in one place and can be read and tested as
 a table.
+
+`interface/` is what the REST and MCP interfaces share, so that an account, an
+entry, or a refusal looks the same on either: the response models, the views that
+build them from domain records, and the unit of work that commits an action, or
+only its audit event if a rule refused it. It depends on Pydantic, but on neither
+interface's framework, and neither interface depends on the other.
 
 ### Protection below the services
 
@@ -213,6 +233,7 @@ accounting logic of its own.
 - **One unit of work per request.** A request gets its own session. An action that
   succeeds is committed; one a rule refuses is committed too, which persists only its
   audit event, since a refusal changes nothing else; any other failure rolls back.
+  The unit of work is `interface/work.py`, which the MCP interface uses too.
 - **Refusals.** Every refusal is answered with the same JSON the audit log records:
   the error, its message, and what it names (issue codes, a missing permission, the
   states an action is allowed from). Statuses follow the error: 401 no valid key, 403
@@ -228,6 +249,62 @@ accounting logic of its own.
   or `uvicorn --factory opensumma.api:create_app`. The schema must already be current;
   `/health`, which needs no key, answers 503 if it is not. OpenAPI documentation is
   served at `/docs`.
+
+## MCP interface
+
+Implemented in `opensumma.mcp` (Phase 8) with the MCP Python SDK (2.x, whose server
+class is `MCPServer`). Like the REST interface it is a thin adapter: the read-only
+tools call the kernel and object layer, and each mutating tool is the workflow
+operation of the same name. The two interfaces serve the same operations, with the
+same identity, permissions, audit, and JSON.
+
+- **Identity.** A server acts as one actor: the one whose API key it was started
+  with, from `OPENSUMMA_API_KEY`. The key is read from the environment, where MCP
+  hosts put a server's credentials, rather than the command line, where the process
+  list would show it. It is checked on every call, so revoking it, or deactivating
+  the actor, cuts a running server off at once. Several actors means several
+  servers, one per actor, over the same database.
+- **Read-only and mutating tools are kept apart:** in their own modules
+  (`read_tools.py`, `mutating_tools.py`), and on the wire, where each tool is
+  annotated `readOnlyHint` true or false, so a host can let an agent read freely and
+  confirm each change. Both sets are closed-world (`openWorldHint` false). Every
+  tool is listed to every actor; a tool the actor lacks the permission for is
+  refused, and the attempt is audited, which is what a benchmark needs in order to
+  count invalid postings.
+- **Permissions.** Every read tool requires READ_ONLY, and is not audited. Every
+  mutating tool requires whatever its workflow operation requires, and is audited by
+  it.
+- **One unit of work per call.** Each call opens its own session and commits through
+  `interface/work.py`, exactly as a REST request does.
+- **Refusals.** A refused call returns an error result (`isError`) whose structured
+  content is the JSON the audit log records for it: the error, its message, and what
+  it names (issue codes, a missing permission, the states an action is allowed
+  from). There are no status codes; the `error` field names the kind. Arguments that
+  do not match a tool's schema are refused by the SDK, as text naming each field,
+  before the tool runs, so they are not audited.
+- **Money as text, and no invented arguments.** Amounts are strings, as on the REST
+  interface, and a JSON number is refused as an amount. Every tool's input schema
+  has `additionalProperties: false`, and an argument a tool does not declare is
+  refused. The SDK ignores unknown arguments by default, which would let an argument
+  an agent invented, such as `approved`, silently do nothing; the server replaces
+  each tool's argument model with one that forbids them.
+- **Results.** A result is one JSON document, both as structured content and as a
+  single text block. A list is returned in a named field, such as
+  `{"accounts": [...]}`, because the SDK would otherwise send a list as one text
+  block per item, and an empty list as no content at all.
+- **Tools beyond the specification's list,** as on the REST interface:
+  `reject_journal_entry` and `void_journal_entry`; `observe_accounting_object`,
+  `extract_accounting_object`, `classify_accounting_object`, and
+  `void_accounting_object`; `close_period` and `reopen_period`; and reads for
+  periods, dimensions, counterparties, the income statement, the balance sheet, and
+  raw ledger lines (`get_ledger`). `search_accounting_objects` also takes a `data`
+  filter, which the REST endpoint does not.
+- **Running it.** `python -m opensumma.mcp [--database-url U]` serves the tools on
+  stdio, which is how MCP hosts launch local servers; it will not start without a
+  key. The schema must already be current. The server sends instructions at
+  initialization: amounts as strings, the entry lifecycle, and concise reasons and
+  evidence. There is no HTTP transport: it would need per-request identity, which
+  the SDK provides only as OAuth.
 
 ## Database
 

@@ -2,11 +2,11 @@
 
 ## Current Phase:
 
-Phase 7 — FastAPI REST interface
+Phase 8 — MCP interface
 
 ## Current Status:
 
-Complete. All Phase 7 acceptance criteria are satisfied. Phase 8 has not started.
+Complete. All Phase 8 acceptance criteria are satisfied. Phase 9 has not started.
 
 ## Completed:
 
@@ -44,27 +44,31 @@ Phase 6 — audit / event log. Every workflow action, allowed or refused, and ev
 change made outside the workflow, in one hash-chained, append-only audit log with
 concise reasons and evidence references.
 
-Phase 7 acceptance criteria:
+Phase 7 — FastAPI REST interface. Every workflow operation and read over HTTP,
+identified by an actor's API key, with READ_ONLY gating every read, refusals
+committed so their audit events survive, and amounts as JSON strings.
 
-- [x] FastAPI application starts (`python -m opensumma.api`; the acceptance test starts
-  it as a real server process and queries it over HTTP; `/health` reports whether
-  the schema is current)
-- [x] Read endpoints work (accounts, balances, periods, dimensions, counterparties,
-  journal entries, the ledger, accounting objects, and the audit log, all requiring
-  READ_ONLY)
-- [x] Journal proposal endpoint works (`POST /journal-entries`, amounts as strings,
-  refused with issue codes when the kernel cannot record it)
-- [x] Validation endpoint works (`POST /journal-entries/{id}/validate`)
-- [x] Approval endpoint works (`POST /journal-entries/{id}/approve`, with submit and
-  reject beside it)
-- [x] Posting endpoint works (`POST /journal-entries/{id}/post`, and reverse)
-- [x] Reports are accessible (trial balance, income statement, balance sheet,
-  general ledger)
-- [x] API integration tests pass
+Phase 8 acceptance criteria:
 
-Callers identify themselves with an actor's API key; the workflow's permissions,
-controls, and audit apply to every change made through the API. A refused action is
-committed, so its audit event survives, as recommended at the end of Phase 6.
+- [x] MCP server starts (`python -m opensumma.mcp`, on stdio, as the actor whose key
+  is in `OPENSUMMA_API_KEY`; the acceptance test launches it as a subprocess and
+  speaks MCP to it with the SDK's client, and checks it will not start without a
+  key)
+- [x] Read tools work (15 read-only tools: the chart, accounts, balances, periods,
+  dimensions, counterparties, journal entries, the ledger, all four reports,
+  accounting objects, and the audit history, each requiring READ_ONLY)
+- [x] Proposal tools work (`propose_journal_entry`, amounts as strings, refused with
+  issue codes when the kernel cannot record it; and `observe_accounting_object`,
+  `extract_accounting_object`, and `classify_accounting_object`)
+- [x] Validation tool works (`validate_journal_entry`)
+- [x] Permission checks work (every mutating tool is the workflow operation of its
+  name, with its permission, controls, and audit; an agent that tries to approve
+  or post is refused, and the attempt is in the audit log)
+- [x] MCP integration tests pass
+
+The MCP and REST interfaces now share `opensumma.interface`: the response models,
+the views, and the unit of work, moved out of `opensumma.api` so that neither
+interface depends on the other.
 
 ## In Progress:
 
@@ -72,9 +76,9 @@ Nothing.
 
 ## Next:
 
-Phase 8 — the MCP interface: the semantic tools as an MCP server, read-only and
-mutating tools kept apart, with the same identity, permissions, and audit as the
-REST interface.
+Phase 9 — the deterministic dataset generator (`erp dataset generate`): companies
+with a chart, counterparties, and a year of realistic transactions from a seed, the
+same seed giving the same books, with errors injected and their ground truth kept.
 
 ## Known Issues:
 
@@ -93,16 +97,16 @@ REST interface.
   still records entries for objects without a counterparty. Both are deliberate: the
   workflow enforces approval, permissions, and counterparties for every actor, and the
   layers beneath stay open to trusted code such as the dataset generator, which must
-  be able to create the mistakes the controls catch. Nothing yet stops untrusted code
-  from calling them; the REST and MCP interfaces (Phases 7 and 8) will expose only
-  the workflow.
+  be able to create the mistakes the controls catch. Nothing stops untrusted Python
+  code from calling them; the REST and MCP interfaces expose only the workflow.
 - Revenue and expenses are never closed into retained earnings. The balance sheet shows
   that income as `unclosed_net_income`, which stays correct. Year-end closing entries
   were not part of Phase 5: they need entries marked as closing, so that the closed
   year's income statement still shows its income, which reaches into the reports
   (open decision 2).
-- READ_ONLY is enforced by the REST interface but not in Python, where reading is not
-  gated. Reads are not audited; agent trajectories (Phase 10) will record tool calls.
+- READ_ONLY is enforced by the REST and MCP interfaces but not in Python, where
+  reading is not gated. Reads are not audited; agent trajectories (Phase 10) will
+  record tool calls.
 - Offline SQL generation (`alembic upgrade head --sql`) does not work for SQLite past the
   Phase 2 migration, because batch mode must read the live table it rebuilds. It works
   for PostgreSQL, where it is useful, and a test keeps it working there.
@@ -118,16 +122,33 @@ REST interface.
   leave no workflow history; they are in the audit log, as the system's changes.
 - Audit events are part of the caller's unit of work. The REST interface commits after
   a refusal, so its event survives; Python callers that roll back discard it.
-- A REST request that does not match the schema, or names a record that does not
-  exist (an unknown entry id in the path, an unknown object in a proposal), is
-  refused before it reaches the workflow and so is not audited.
-- `/ledger` and `/accounting-objects` return everything matching their filters, with
-  no paging; `/audit-events` pages. A large dataset (Phase 9) will want paging on the
-  first two.
+- A REST request or MCP call that does not match the schema, or names a record that
+  does not exist (an unknown entry id, an unknown object in a proposal), is refused
+  before it reaches the workflow and so is not audited. Over MCP, a schema mismatch
+  is reported by the SDK as text naming each field, not as structured JSON.
+- `/ledger` and `/accounting-objects`, and the `get_ledger` and
+  `search_accounting_objects` tools, return everything matching their filters, with
+  no paging; the audit history pages. A large dataset (Phase 9) will want paging on
+  the others.
 - API keys do not expire; revoking them, or deactivating the actor, cuts access. The
   server has no TLS or rate limiting: it is meant for a local laboratory.
-- `search_transactions`, `get_open_ap`, and `get_open_ar` have no endpoint yet; the
-  last two wait on settlement between payments and bills.
+- `search_transactions`, `get_open_ap`, and `get_open_ar` have no endpoint or tool
+  yet; the last two wait on settlement between payments and bills, and the first
+  has not been defined. Nothing lists journal entries by status either, so an
+  approving agent finds entries awaiting approval through the audit history
+  (`get_audit_history` with `action="submit_for_approval"`). Phase 11's agents will
+  want both.
+- The MCP server runs on stdio only, one actor per server process, so a workflow
+  with several actors runs several servers. An HTTP transport would need
+  per-request identity, which the SDK provides only as OAuth.
+- Refusing unknown MCP arguments replaces each tool's argument model after the SDK
+  builds it (`Tool.fn_metadata.arg_model` and `Tool.parameters`). The SDK documents
+  those fields as read on every call, but they are not a declared extension point,
+  so an SDK upgrade could break it; the tests that invent arguments would catch
+  that.
+- The project requires the MCP SDK 2.x (`mcp>=2.2`); version 1's `FastMCP` API is
+  gone. The SDK brings its own dependencies, among them `cryptography`, `pyjwt`,
+  `jsonschema`, and `sse-starlette`.
 - Starlette 1.x prefers `httpx2` for its test client and warns about `httpx`, which
   the suite treats as an error, so the dev dependency is `httpx2`.
 - Raw SQL is beyond the audit log, as it is beyond the immutability guards: a change
@@ -143,52 +164,50 @@ REST interface.
 - Data filters in `search_accounting_objects` match top-level fields as text, so a
   filter of `"3"` also matches a stored integer `3`, on SQLite and PostgreSQL alike.
 
-## Design decisions made in Phase 7:
+## Design decisions made in Phase 8:
 
-Recorded in [docs/architecture.md](docs/architecture.md#rest-interface) and
+Recorded in [docs/architecture.md](docs/architecture.md#mcp-interface) and
 [docs/agent-model.md](docs/agent-model.md#tools).
 
-1. **A thin adapter.** `opensumma.api` holds no accounting logic: reads call the
-   kernel and object layer, and every change is a workflow operation. No domain layer
-   imports it or any web framework, which the layering test enforces.
-2. **API keys, not claimed identities.** A header naming an actor would let an agent
-   claim to be its approver. Keys are random, shown once, stored as SHA-256 hashes in
-   the workflow layer, and revocable.
-3. **READ_ONLY gates every read,** so the permission defined in Phase 5 now means
-   something.
-4. **Refusals are committed,** so their audit events survive, and answered with the
-   same JSON the audit log records, so an agent reads the same vocabulary as an
-   auditor. HTTP statuses follow the kind of refusal: 401, 403, 404, 409, 422.
-5. **Amounts are JSON strings;** a JSON number is refused as an amount, and requests
-   refuse unknown fields, so neither a float nor a hallucinated field gets in.
-6. **Beyond the specification's endpoint list:** submit, reject, and void for
-   entries; observe, extract, classify, and void for objects; period close and
-   reopen; and reads for periods, dimensions, counterparties, and the general
-   ledger. Without submit, nothing could ever be approved.
-7. **Accounts are addressed by code** (`/accounts/6100`), as agents refer to them.
-8. **`/health` checks the schema revision** and answers 503 when it is not current;
-   the app never migrates a database by itself.
+1. **A shared package, not a dependency between interfaces.** The response models,
+   views, and unit of work moved from `opensumma.api` to `opensumma.interface`, so
+   the MCP server never imports FastAPI and an entry or refusal looks the same on
+   either interface. The layering test keeps the two interfaces peers.
+2. **One actor per server, its key from the environment,** checked on every call,
+   so revocation takes effect at once. The key stays out of the process list.
+3. **Every tool is listed to every actor.** Permissions refuse, and the refusal is
+   audited, rather than hiding tools: an agent's attempt to approve its own work is
+   exactly what a benchmark needs to see. Read-only and mutating tools are kept
+   apart in their own modules and by the `readOnlyHint` annotation.
+4. **Refusals are error results carrying the audit log's JSON,** so an agent reads
+   the error, issue codes, and missing permission as structured data.
+5. **Unknown arguments are refused,** as the REST interface refuses unknown fields;
+   the SDK would otherwise ignore them silently.
+6. **One JSON document per result,** with lists in named fields, because the SDK
+   sends a bare list as one text block per item and an empty one as nothing.
+7. **The tools mirror the REST interface,** plus a `data` filter on
+   `search_accounting_objects` for finding duplicate documents, and a required
+   `reason` in the schema of the four tools whose operation requires one.
+   `search_transactions` is left until the benchmark says what it must find.
 
 ## Last Verification:
 
 2026-09-29, on Python 3.12.14 and 3.13.15:
 
-- `pytest`: 586 passed (166 unit, 374 integration, 46 acceptance), including 455
-  generated Hypothesis scenarios
+- `pytest`: 629 passed (169 unit, 408 integration, 52 acceptance), including the
+  acceptance test that launches `python -m opensumma.mcp` and speaks MCP to it over
+  stdio
 - `ruff check .`: passed
 - `ruff format --check .`: passed
 - `mypy` (strict): passed
-- The package built as a wheel containing `opensumma/api/` and all eight migrations,
-  installed non-editably into a fresh Python 3.13 environment, and the whole suite,
-  Ruff, and mypy passed against the installed package, including the acceptance test
-  that starts the server as a process.
-- `alembic upgrade head` applied all eight revisions, `alembic check` reported no
-  drift, and `alembic downgrade base` unwound them. Offline PostgreSQL SQL includes
-  the API key table.
+- The package built as a wheel containing `opensumma/mcp/`, `opensumma/interface/`,
+  and all eight migrations, and requiring `mcp>=2.2`; installed non-editably into a
+  fresh Python 3.13 environment, the whole suite, Ruff, and mypy passed against it.
 - Mutation checks, each caught by the suite and then undone: refusals rolled back
-  and their audit events lost; reads without READ_ONLY; revoked keys accepted; JSON
-  numbers accepted as amounts; unknown request fields ignored; permission refusals
-  answered with the wrong status; proposals bypassing the workflow; and the kernel
-  importing FastAPI.
-- The README's examples were executed, and its `curl` commands were run against a
-  live server started with `python -m opensumma.api`; every response matched.
+  and their audit events lost; reads without READ_ONLY; the key authenticated once
+  instead of on every call; unknown arguments ignored; refusals answered as plain
+  text; every tool annotated read-only; a proposal bypassing the workflow; the MCP
+  interface importing the REST interface; the shared views importing the MCP SDK;
+  and the server starting without a key.
+- The README's Python examples were executed in order, the MCP example included,
+  and every printed value matched.

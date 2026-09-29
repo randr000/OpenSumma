@@ -1,14 +1,14 @@
-"""Domain records as the REST interface presents them.
+"""Domain records as the interfaces present them.
 
-Every endpoint that returns, say, a journal entry builds it here, so an entry looks
-the same whichever endpoint returned it.
+Every REST endpoint and MCP tool that returns, say, a journal entry builds it here,
+so an entry looks the same whichever endpoint or tool returned it.
 """
 
 from collections.abc import Iterable, Sequence
 
 from sqlalchemy.orm import Session
 
-from opensumma.api import schemas
+from opensumma.interface import schemas
 from opensumma.kernel import (
     Account,
     AccountBalance,

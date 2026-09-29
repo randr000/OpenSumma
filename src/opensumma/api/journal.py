@@ -9,8 +9,9 @@ from fastapi import APIRouter, Query
 from sqlalchemy.orm import Session
 
 from opensumma import kernel, workflow
-from opensumma.api import schemas, views
-from opensumma.api.dependencies import ActorDep, ReaderDep, SessionDep, unit_of_work
+from opensumma.api.dependencies import ActorDep, ReaderDep, SessionDep
+from opensumma.interface import schemas, views
+from opensumma.interface.work import unit_of_work
 from opensumma.kernel import JournalEntry, LineInput
 from opensumma.objects import get_accounting_object
 

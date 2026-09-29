@@ -15,9 +15,10 @@ from alembic.script import ScriptDirectory
 from fastapi import FastAPI, Response
 from sqlalchemy.orm import sessionmaker
 
-from opensumma.api import audit, journal, master_data, objects, reports, schemas
+from opensumma.api import audit, journal, master_data, objects, reports
 from opensumma.api.errors import install_error_handlers
 from opensumma.db import alembic_config, create_engine, get_database_url
+from opensumma.interface import schemas
 
 
 def create_app(database_url: str | None = None) -> FastAPI:

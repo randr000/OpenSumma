@@ -5,8 +5,8 @@ from datetime import date
 from fastapi import APIRouter
 
 from opensumma import kernel
-from opensumma.api import schemas, views
 from opensumma.api.dependencies import ReaderDep, SessionDep
+from opensumma.interface import schemas, views
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 

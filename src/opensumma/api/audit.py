@@ -4,13 +4,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query
 
-from opensumma.api import schemas, views
 from opensumma.api.dependencies import ReaderDep, SessionDep
+from opensumma.interface import schemas, views
 from opensumma.workflow import AuditResult, audit_history, get_actor
 
 router = APIRouter(tags=["audit"])
-
-PAGE_LIMIT = 1000
 
 
 @router.get("/audit-events")
@@ -23,7 +21,7 @@ def list_audit_events(
     action: str | None = None,
     result: AuditResult | None = None,
     after: int | None = None,
-    limit: Annotated[int, Query(ge=1, le=PAGE_LIMIT)] = 100,
+    limit: Annotated[int, Query(ge=1, le=schemas.AUDIT_PAGE_LIMIT)] = 100,
 ) -> list[schemas.AuditEventOut]:
     """Audit events matching every filter, oldest first.
 
