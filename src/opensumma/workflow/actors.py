@@ -4,15 +4,24 @@ Creating actors and setting their permissions is trusted setup, done in Python l
 seeding a chart of accounts; no workflow action grants permissions.
 """
 
+import hashlib
+import secrets
 from collections.abc import Iterable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from opensumma.kernel import DuplicateCodeError
+from opensumma.utc import utcnow
 from opensumma.workflow.enums import ActorType, Permission
-from opensumma.workflow.errors import PermissionDeniedError, UnknownActorError
-from opensumma.workflow.models import Actor, ActorPermission
+from opensumma.workflow.errors import (
+    AuthenticationError,
+    PermissionDeniedError,
+    UnknownActorError,
+)
+from opensumma.workflow.models import Actor, ActorPermission, ApiKey
+
+API_KEY_PREFIX = "osk_"
 
 
 def create_actor(
@@ -79,3 +88,41 @@ def require_permission(actor: Actor, permission: Permission) -> None:
             f"{permission.value} permission",
             permission,
         )
+
+
+def issue_api_key(session: Session, actor: Actor) -> str:
+    """Issue a new API key for ``actor`` and return it.
+
+    The key is returned only this once; the database keeps just its hash.
+    """
+    key = API_KEY_PREFIX + secrets.token_urlsafe(32)
+    session.add(ApiKey(actor=actor, key_hash=_hash_key(key)))
+    return key
+
+
+def authenticate(session: Session, key: str) -> Actor:
+    """The actor ``key`` identifies, or raise ``AuthenticationError``.
+
+    Whether that actor may act is a separate question: an inactive actor is still
+    identified, and then refused by ``require_permission``.
+    """
+    statement = select(ApiKey).where(ApiKey.key_hash == _hash_key(key))
+    found = session.scalars(statement).one_or_none()
+    if found is None or found.revoked_at is not None:
+        raise AuthenticationError("the API key is unknown or revoked")
+    return found.actor
+
+
+def revoke_api_keys(session: Session, actor: Actor) -> int:
+    """Revoke every API key ``actor`` holds; return how many were revoked."""
+    statement = select(ApiKey).where(
+        ApiKey.actor_id == actor.id, ApiKey.revoked_at.is_(None)
+    )
+    keys = list(session.scalars(statement))
+    for key in keys:
+        key.revoked_at = utcnow()
+    return len(keys)
+
+
+def _hash_key(key: str) -> str:
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()

@@ -182,7 +182,7 @@ def audited(
         scope.evidence = evidence_references(evidence)
         yield scope
     except REFUSALS as error:
-        _record(session, scope, AuditResult.REFUSED, _refusal(error))
+        _record(session, scope, AuditResult.REFUSED, describe_refusal(error))
         raise
     else:
         session.flush()
@@ -219,8 +219,12 @@ def issues_json(issues: Sequence[ValidationIssue]) -> list[dict[str, Any]]:
     ]
 
 
-def _refusal(error: BaseException) -> dict[str, Any]:
-    """What refused the action: the error, its message, and any details it names."""
+def describe_refusal(error: BaseException) -> dict[str, Any]:
+    """What refused an action: the error, its message, and any details it names.
+
+    The audit log records this for a refused action, and the interfaces return it,
+    so both speak the same vocabulary.
+    """
     output: dict[str, Any] = {"error": type(error).__name__, "message": str(error)}
     if isinstance(error, JournalEntryError):
         output["issues"] = issues_json(error.issues)
@@ -383,24 +387,38 @@ def audit_history(
     session: Session,
     *,
     subject: Base | None = None,
+    object_type: str | None = None,
+    object_id: int | None = None,
     actor: Actor | None = None,
     action: str | None = None,
     result: AuditResult | str | None = None,
+    after: int | None = None,
+    limit: int | None = None,
 ) -> list[AuditEvent]:
-    """Audit events matching every filter given, oldest first."""
+    """Audit events matching every filter given, oldest first.
+
+    ``subject`` is shorthand for its ``object_type`` and ``object_id``. ``after`` and
+    ``limit`` page through the log: pass the last sequence of one page as ``after``
+    to read the next.
+    """
     session.flush()
-    statement = select(AuditEvent).order_by(AuditEvent.sequence)
     if subject is not None:
-        statement = statement.where(
-            AuditEvent.object_type == _table_name(subject),
-            AuditEvent.object_id == _first_key(subject),
-        )
+        object_type, object_id = _table_name(subject), _first_key(subject)
+    statement = select(AuditEvent).order_by(AuditEvent.sequence)
+    if object_type is not None:
+        statement = statement.where(AuditEvent.object_type == object_type)
+    if object_id is not None:
+        statement = statement.where(AuditEvent.object_id == object_id)
     if actor is not None:
         statement = statement.where(AuditEvent.actor_id == actor.id)
     if action is not None:
         statement = statement.where(AuditEvent.action == action)
     if result is not None:
         statement = statement.where(AuditEvent.result == AuditResult(result))
+    if after is not None:
+        statement = statement.where(AuditEvent.sequence > after)
+    if limit is not None:
+        statement = statement.limit(limit)
     return list(session.scalars(statement))
 
 

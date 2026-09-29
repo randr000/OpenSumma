@@ -74,6 +74,7 @@ def test_postgresql_sql_can_be_generated_offline() -> None:
     assert "UPDATE accounting_object SET counterparty_id" in sql
     assert "CREATE TABLE audit_event" in sql
     assert "CREATE INDEX ix_audit_event_subject" in sql
+    assert "CREATE TABLE api_key" in sql
     assert sql.index("CREATE TABLE journal_entry") < sql.index(
         "CREATE TABLE accounting_object_entry"
     )

@@ -2,9 +2,9 @@
 
 **Status:** actors, permissions, the workflow operations behind the mutating tools,
 and the audit log are implemented (Phases 5 and 6, `opensumma.workflow`), and so are
-the kernel and object operations behind the read-only tools (Phases 2 to 4). The
-tools themselves arrive with the REST and MCP interfaces (Phases 7 and 8); the
-benchmark is Phase 10, and example agents Phase 11.
+the kernel and object operations behind the read-only tools (Phases 2 to 4). Every
+tool is reachable over the REST interface (Phase 7, `opensumma.api`); the MCP
+interface is Phase 8, the benchmark Phase 10, and example agents Phase 11.
 
 ## Principle
 
@@ -28,7 +28,7 @@ superuser, and an approver who should also post needs POSTER too.
 
 | Permission | Allows |
 | --- | --- |
-| READ_ONLY | Querying accounts, balances, ledgers, reports, objects, and history. Enforced by the REST and MCP interfaces, because reading from Python is not gated |
+| READ_ONLY | Querying accounts, balances, ledgers, reports, objects, and history. Enforced by the interfaces (REST since Phase 7), because reading from Python is not gated |
 | PROPOSER | Observing, extracting, and classifying objects; proposing, validating, and submitting entries; voiding drafts and proposals |
 | APPROVER | Approving or rejecting pending entries; voiding entries under review or approved; voiding objects |
 | POSTER | Posting approved entries and reversing posted ones |
@@ -88,11 +88,41 @@ name yet: `reject_journal_entry` and `void_journal_entry` for entries;
 `classify_accounting_object`, and `void_accounting_object` for objects; and
 `close_period` and `reopen_period`.
 
+Over REST (Phase 7), each tool is an endpoint, called with the actor's API key as
+`Authorization: Bearer <key>`:
+
+| Tool | Endpoint |
+| --- | --- |
+| `get_chart_of_accounts` | `GET /accounts` |
+| `get_account` | `GET /accounts/{code}` |
+| `get_account_balance` | `GET /accounts/{code}/balance?as_of=` |
+| `get_trial_balance` | `GET /reports/trial-balance?as_of=` |
+| `get_general_ledger` | `GET /reports/general-ledger?start=&end=&account=`, or `GET /ledger` for raw ledger lines |
+| `get_journal_entry` | `GET /journal-entries/{id}` |
+| `get_accounting_object` | `GET /accounting-objects/{id}` |
+| `search_accounting_objects` | `GET /accounting-objects?object_type=&counterparty=&...` |
+| `get_audit_history` | `GET /audit-events?object_type=&object_id=&actor=&after=&limit=` |
+| `propose_journal_entry` | `POST /journal-entries` |
+| `validate_journal_entry` | `POST /journal-entries/{id}/validate` |
+| `submit_for_approval` | `POST /journal-entries/{id}/submit` |
+| `approve_journal_entry` | `POST /journal-entries/{id}/approve` |
+| `post_journal_entry` | `POST /journal-entries/{id}/post` |
+| `reverse_journal_entry` | `POST /journal-entries/{id}/reverse` |
+
+The workflow's other operations are endpoints too: `reject` and `void` for entries;
+`POST /accounting-objects` (observe) and `extract`, `classify`, and `void` for
+objects; `close` and `reopen` for `/periods/{code}`. Reference data an agent needs to
+propose well is readable at `/periods`, `/dimensions`, and `/counterparties`, and
+income statements and balance sheets at `/reports/income-statement` and
+`/reports/balance-sheet`. `search_transactions`, `get_open_ap`, and `get_open_ar`
+have no endpoint yet.
+
 A refused step raises a specific error: `InvalidTransitionError` (not from this
 state, naming the states it is allowed from), `PermissionDeniedError` (naming the
 permission), `SegregationOfDutiesError`, `CounterpartyRequiredError`,
 `PeriodSequenceError` or `PendingEntriesError` (naming what to deal with first), or
-the kernel's `JournalEntryError` with its issue codes.
+the kernel's `JournalEntryError` with its issue codes. The REST interface answers
+with the same JSON the audit log records for the refusal.
 
 ## Validation results
 

@@ -2,11 +2,11 @@
 
 ## Current Phase:
 
-Phase 6 — Audit / event log
+Phase 7 — FastAPI REST interface
 
 ## Current Status:
 
-Complete. All Phase 6 acceptance criteria are satisfied. Phase 7 has not started.
+Complete. All Phase 7 acceptance criteria are satisfied. Phase 8 has not started.
 
 ## Completed:
 
@@ -40,28 +40,31 @@ for entries, objects, and periods as tables; approval with segregation of duties
 posting only once approved; ordered period close; an append-only transition history.
 Counterparties replaced `entity_id`.
 
-Phase 6 acceptance criteria:
+Phase 6 — audit / event log. Every workflow action, allowed or refused, and every
+change made outside the workflow, in one hash-chained, append-only audit log with
+concise reasons and evidence references.
 
-- [x] Audit events exist (`AuditEvent`: timestamp, actor type and id, action, object
-  type and id, input, output, result, evidence, and a concise reason)
-- [x] Human/agent/system actors are distinguishable (`actor_type` on every event; a
-  registered actor's id; only the SYSTEM may act without one, which the database
-  enforces)
-- [x] Accounting mutations create audit events (every workflow operation records one,
-  allowed or refused; every change made outside the workflow is captured as the
-  system's; bulk writes that would escape capture are refused)
-- [x] Audit records cannot be silently modified (the ORM refuses changes and deletes;
-  events are hash-chained, and `verify_audit_log` names the first event altered,
-  removed, or inserted by any means)
-- [x] Evidence references can be stored (a list of up to 50 references per event,
-  stored and read back exactly, as in the specification's example)
+Phase 7 acceptance criteria:
 
-The acceptance test records the specification's own example: an agent proposing with
-that reason and evidence, refused when it tries to post unapproved, a human
-approving, a posting service posting, and trusted code opening the books; then
-someone edits the log behind the ORM and the chain exposes it. A property test builds
-random logs and alters every field of every event in turn with raw SQL; each
-alteration must be reported at exactly that event.
+- [x] FastAPI application starts (`python -m opensumma.api`; the acceptance test starts
+  it as a real server process and queries it over HTTP; `/health` reports whether
+  the schema is current)
+- [x] Read endpoints work (accounts, balances, periods, dimensions, counterparties,
+  journal entries, the ledger, accounting objects, and the audit log, all requiring
+  READ_ONLY)
+- [x] Journal proposal endpoint works (`POST /journal-entries`, amounts as strings,
+  refused with issue codes when the kernel cannot record it)
+- [x] Validation endpoint works (`POST /journal-entries/{id}/validate`)
+- [x] Approval endpoint works (`POST /journal-entries/{id}/approve`, with submit and
+  reject beside it)
+- [x] Posting endpoint works (`POST /journal-entries/{id}/post`, and reverse)
+- [x] Reports are accessible (trial balance, income statement, balance sheet,
+  general ledger)
+- [x] API integration tests pass
+
+Callers identify themselves with an actor's API key; the workflow's permissions,
+controls, and audit apply to every change made through the API. A refused action is
+committed, so its audit event survives, as recommended at the end of Phase 6.
 
 ## In Progress:
 
@@ -69,9 +72,9 @@ Nothing.
 
 ## Next:
 
-Phase 7 — the FastAPI REST interface: read endpoints, journal proposal, validation,
-approval, and posting endpoints, and reports, as thin adapters over the workflow and
-the kernel, with API integration tests.
+Phase 8 — the MCP interface: the semantic tools as an MCP server, read-only and
+mutating tools kept apart, with the same identity, permissions, and audit as the
+REST interface.
 
 ## Known Issues:
 
@@ -98,9 +101,8 @@ the kernel, with API integration tests.
   were not part of Phase 5: they need entries marked as closing, so that the closed
   year's income statement still shows its income, which reaches into the reports
   (open decision 2).
-- READ_ONLY is defined but not enforced, because reading from Python is not gated. The
-  REST and MCP interfaces will enforce it. Reads are not audited either; the
-  interfaces may record tool calls for agent trajectories (Phase 10).
+- READ_ONLY is enforced by the REST interface but not in Python, where reading is not
+  gated. Reads are not audited; agent trajectories (Phase 10) will record tool calls.
 - Offline SQL generation (`alembic upgrade head --sql`) does not work for SQLite past the
   Phase 2 migration, because batch mode must read the live table it rebuilds. It works
   for PostgreSQL, where it is useful, and a test keeps it working there.
@@ -114,10 +116,20 @@ the kernel, with API integration tests.
   such object was a customer document). Converted counterparties are worth reviewing.
 - Operations on the kernel or object layer called directly, outside the workflow,
   leave no workflow history; they are in the audit log, as the system's changes.
-- Audit events are part of the caller's unit of work. A refused action changes
-  nothing else, so committing afterwards persists its event, but a caller that rolls
-  back the whole transaction discards it too. The interfaces (Phases 7 and 8) should
-  commit after a refusal.
+- Audit events are part of the caller's unit of work. The REST interface commits after
+  a refusal, so its event survives; Python callers that roll back discard it.
+- A REST request that does not match the schema, or names a record that does not
+  exist (an unknown entry id in the path, an unknown object in a proposal), is
+  refused before it reaches the workflow and so is not audited.
+- `/ledger` and `/accounting-objects` return everything matching their filters, with
+  no paging; `/audit-events` pages. A large dataset (Phase 9) will want paging on the
+  first two.
+- API keys do not expire; revoking them, or deactivating the actor, cuts access. The
+  server has no TLS or rate limiting: it is meant for a local laboratory.
+- `search_transactions`, `get_open_ap`, and `get_open_ar` have no endpoint yet; the
+  last two wait on settlement between payments and bills.
+- Starlette 1.x prefers `httpx2` for its test client and warns about `httpx`, which
+  the suite treats as an error, so the dev dependency is `httpx2`.
 - Raw SQL is beyond the audit log, as it is beyond the immutability guards: a change
   made that way to a record other than an audit event leaves no event. Changes to the
   audit log itself are detected by `verify_audit_log`, except removing events from
@@ -131,56 +143,52 @@ the kernel, with API integration tests.
 - Data filters in `search_accounting_objects` match top-level fields as text, so a
   filter of `"3"` also matches a stored integer `3`, on SQLite and PostgreSQL alike.
 
-## Design decisions made in Phase 6:
+## Design decisions made in Phase 7:
 
-Recorded in [docs/agent-model.md](docs/agent-model.md#audit).
+Recorded in [docs/architecture.md](docs/architecture.md#rest-interface) and
+[docs/agent-model.md](docs/agent-model.md#tools).
 
-1. **One audit log, two sources.** Workflow operations record one event per call,
-   named like the agent tool; changes made outside any audited action are captured
-   as the system's, named `create_`, `update_`, or `delete_` and the table. Together
-   they cover every accounting change, whichever path made it.
-2. **Refused attempts are audited**, with the error and what it names, because what an
-   agent tried and was stopped from doing is what the benchmark's invalid-posting
-   and tool-use measures need.
-3. **Capture listens to what the flush writes** (mapper events), not to what the
-   session lists beforehand, so rows deleted as orphans by a cascade are captured.
-   An early version listened to the session and missed them; a test caught it.
-4. **Previous values come from the database,** read on the flush's connection,
-   because SQLAlchemy forgets them once a commit has expired an object.
-5. **Changes inside an action are not captured twice,** and changes pending before an
-   action are flushed and captured first, so none is credited to the wrong action.
-6. **Tamper evidence is a hash chain.** Each event's SHA-256 covers its content and
-   the previous hash, computed over canonical JSON, so it does not depend on the
-   database. This is what "cannot be silently modified" asks for beyond the ORM.
-7. **A reason is capped at 500 characters and evidence is references,** which keeps
-   chain-of-thought out of the log by construction.
-8. **The audit log lives in the workflow package,** because its events name actors
-   and the workflow writes them; a separate package would depend on the workflow
-   and be depended on by it.
-9. **Bulk writes are refused on every table,** since they would escape capture.
+1. **A thin adapter.** `opensumma.api` holds no accounting logic: reads call the
+   kernel and object layer, and every change is a workflow operation. No domain layer
+   imports it or any web framework, which the layering test enforces.
+2. **API keys, not claimed identities.** A header naming an actor would let an agent
+   claim to be its approver. Keys are random, shown once, stored as SHA-256 hashes in
+   the workflow layer, and revocable.
+3. **READ_ONLY gates every read,** so the permission defined in Phase 5 now means
+   something.
+4. **Refusals are committed,** so their audit events survive, and answered with the
+   same JSON the audit log records, so an agent reads the same vocabulary as an
+   auditor. HTTP statuses follow the kind of refusal: 401, 403, 404, 409, 422.
+5. **Amounts are JSON strings;** a JSON number is refused as an amount, and requests
+   refuse unknown fields, so neither a float nor a hallucinated field gets in.
+6. **Beyond the specification's endpoint list:** submit, reject, and void for
+   entries; observe, extract, classify, and void for objects; period close and
+   reopen; and reads for periods, dimensions, counterparties, and the general
+   ledger. Without submit, nothing could ever be approved.
+7. **Accounts are addressed by code** (`/accounts/6100`), as agents refer to them.
+8. **`/health` checks the schema revision** and answers 503 when it is not current;
+   the app never migrates a database by itself.
 
 ## Last Verification:
 
 2026-09-29, on Python 3.12.14 and 3.13.15:
 
-- `pytest`: 527 passed (165 unit, 323 integration, 39 acceptance), including 455
-  generated Hypothesis scenarios and 5 fixed workflow examples
+- `pytest`: 586 passed (166 unit, 374 integration, 46 acceptance), including 455
+  generated Hypothesis scenarios
 - `ruff check .`: passed
 - `ruff format --check .`: passed
 - `mypy` (strict): passed
-- The package built as a wheel containing `opensumma/workflow/audit.py` and all seven
-  migrations, installed non-editably into a fresh Python 3.13 environment, and the
-  whole suite, Ruff, and mypy passed against the installed package.
-- `alembic upgrade head` applied all seven revisions, `alembic check` reported no
+- The package built as a wheel containing `opensumma/api/` and all eight migrations,
+  installed non-editably into a fresh Python 3.13 environment, and the whole suite,
+  Ruff, and mypy passed against the installed package, including the acceptance test
+  that starts the server as a process.
+- `alembic upgrade head` applied all eight revisions, `alembic check` reported no
   drift, and `alembic downgrade base` unwound them. Offline PostgreSQL SQL includes
-  the audit table and its subject index, and a test checks it.
-- Mutation checks, each caught by the suite and then undone: refusals not recorded;
-  inserts not captured; deletes, including orphans, not captured; changes inside an
-  action captured twice; pending changes credited to the action; audit events
-  editable; bulk writes allowed; a string accepted as evidence; sequence gaps not
-  checked; the hash leaving out the previous event; and the hash leaving out each of
-  eight fields in turn. Two of these survived at first: the tamper property test
-  picked fields at random and could miss one, so it now alters every field of every
-  event; and no test forged an event and relinked its successor, which one now does.
-- Every figure in the acceptance tests was worked out beforehand, and all four README
-  examples were executed and printed exactly what their comments claim.
+  the API key table.
+- Mutation checks, each caught by the suite and then undone: refusals rolled back
+  and their audit events lost; reads without READ_ONLY; revoked keys accepted; JSON
+  numbers accepted as amounts; unknown request fields ignored; permission refusals
+  answered with the wrong status; proposals bypassing the workflow; and the kernel
+  importing FastAPI.
+- The README's examples were executed, and its `curl` commands were run against a
+  live server started with `python -m opensumma.api`; every response matched.

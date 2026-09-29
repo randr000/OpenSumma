@@ -16,6 +16,10 @@ class UnknownActorError(WorkflowError):
     """No actor exists with the given code."""
 
 
+class AuthenticationError(WorkflowError):
+    """An API key is unknown or revoked, so it identifies no actor."""
+
+
 class PermissionDeniedError(WorkflowError):
     """The actor lacks the permission the action needs, or is inactive."""
 

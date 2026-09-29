@@ -328,6 +328,46 @@ with Session(create_engine(url)) as session:
     print(verify_audit_log(session).is_intact)  # True
 ```
 
+## The REST API
+
+The same operations are served over HTTP (`opensumma.api`, built on FastAPI). A
+caller identifies itself with an actor's API key, which is shown once when issued
+and stored only as a hash. Continuing the examples above:
+
+```python
+from opensumma.workflow import get_actor, issue_api_key
+
+with Session(create_engine(url)) as session:
+    key = issue_api_key(session, get_actor(session, "ap-agent"))
+    session.commit()
+    print(key.startswith("osk_"))  # True; keep the key, it is not shown again
+```
+
+Then serve the API and call it as that actor:
+
+```bash
+python -m opensumma.api --database-url sqlite:///opensumma.db  # docs at /docs
+export KEY=osk_...                                             # the key above
+
+curl -s -H "Authorization: Bearer $KEY" http://127.0.0.1:8000/accounts/6100
+# {"code":"6100","name":"Software Subscriptions","account_type":"EXPENSE",...}
+
+curl -s -X POST http://127.0.0.1:8000/journal-entries \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"entry_date": "2026-03-28", "description": "Brightline, March",
+       "lines": [{"account": "6100", "debit": "49.00"},
+                 {"account": "2110", "credit": "49.00"}]}'
+# {"id":8,"entry_date":"2026-03-28","description":"Brightline, March","status":"PROPOSED",...}
+
+curl -s -X POST -H "Authorization: Bearer $KEY" \
+  http://127.0.0.1:8000/journal-entries/8/approve
+# {"error":"InvalidTransitionError","message":"cannot approve from PROPOSED; ...}
+```
+
+Amounts are strings, never JSON numbers. Every read needs READ_ONLY; every change is
+a workflow operation, with its permission checks and its audit event. A refusal is
+answered with the same JSON the audit log records for it.
+
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md): layers, boundaries, and infrastructure decisions

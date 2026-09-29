@@ -3,7 +3,8 @@
 This is what makes "financial reports derive from the ledger, never from Accounting
 Objects" a property of the code: no kernel module can import the object layer, so
 no report can read an object. Likewise the kernel and the object layer never
-depend on the workflow engine, which wraps them.
+depend on the workflow engine, which wraps them, and no domain layer depends on the
+REST interface or on the web frameworks the interfaces use.
 """
 
 import ast
@@ -15,10 +16,15 @@ import opensumma
 
 PACKAGE = Path(opensumma.__file__).parent
 
-# Each layer, and the layers above it that it must never import.
+# The interfaces' frameworks, which the domain must never depend on.
+FRAMEWORKS = ("fastapi", "starlette", "uvicorn", "pydantic", "mcp")
+
+# Each layer, and what it must never import: the layers above it, and the
+# frameworks the interfaces are built with.
 LAYERS = {
-    "kernel": ("opensumma.objects", "opensumma.workflow"),
-    "objects": ("opensumma.workflow",),
+    "kernel": ("opensumma.objects", "opensumma.workflow", "opensumma.api", *FRAMEWORKS),
+    "objects": ("opensumma.workflow", "opensumma.api", *FRAMEWORKS),
+    "workflow": ("opensumma.api", *FRAMEWORKS),
 }
 
 

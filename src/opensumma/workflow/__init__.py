@@ -25,11 +25,14 @@ from opensumma.workflow.accounting_objects import (
 )
 from opensumma.workflow.actors import (
     actors,
+    authenticate,
     create_actor,
     deactivate_actor,
     find_actor,
     get_actor,
+    issue_api_key,
     require_permission,
+    revoke_api_keys,
     set_actor_permissions,
 )
 from opensumma.workflow.audit import (
@@ -38,6 +41,7 @@ from opensumma.workflow.audit import (
     audit_history,
     audit_json,
     audited,
+    describe_refusal,
     evidence_references,
     verify_audit_log,
 )
@@ -58,6 +62,7 @@ from opensumma.workflow.enums import (
     WorkflowAction,
 )
 from opensumma.workflow.errors import (
+    AuthenticationError,
     CounterpartyRequiredError,
     ImmutableHistoryError,
     InvalidTransitionError,
@@ -79,6 +84,7 @@ from opensumma.workflow.machine import (
 from opensumma.workflow.models import (
     Actor,
     ActorPermission,
+    ApiKey,
     AuditEvent,
     WorkflowTransition,
     audit_hash,
@@ -92,10 +98,12 @@ __all__ = [
     "Actor",
     "ActorPermission",
     "ActorType",
+    "ApiKey",
     "AuditEvent",
     "AuditResult",
     "AuditScope",
     "AuditVerification",
+    "AuthenticationError",
     "CounterpartyRequiredError",
     "ImmutableHistoryError",
     "InvalidTransitionError",
@@ -116,14 +124,17 @@ __all__ = [
     "audit_history",
     "audit_json",
     "audited",
+    "authenticate",
     "classify_accounting_object",
     "close_period",
     "create_actor",
     "deactivate_actor",
+    "describe_refusal",
     "evidence_references",
     "extract_accounting_object",
     "find_actor",
     "get_actor",
+    "issue_api_key",
     "observe_accounting_object",
     "post_journal_entry",
     "propose_journal_entry",
@@ -131,6 +142,7 @@ __all__ = [
     "reopen_period",
     "require_permission",
     "reverse_journal_entry",
+    "revoke_api_keys",
     "set_actor_permissions",
     "submit_for_approval",
     "validate_journal_entry",

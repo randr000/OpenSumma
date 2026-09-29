@@ -86,6 +86,30 @@ class Actor(TimestampMixin, Base):
         return f"Actor(code={self.code!r}, actor_type={self.actor_type.value})"
 
 
+class ApiKey(Base):
+    """A credential by which an interface knows which actor is calling.
+
+    Only the SHA-256 hash of the key is stored; the key itself is shown once, when
+    it is issued. A revoked key identifies no one.
+    """
+
+    __tablename__ = "api_key"
+    __table_args__ = (
+        CheckConstraint(f"length(key_hash) = {HASH_LENGTH}", name="key_hash_is_sha256"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("actor.id"), index=True)
+    key_hash: Mapped[str] = mapped_column(String(HASH_LENGTH), unique=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+    revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+
+    actor: Mapped[Actor] = relationship()
+
+    def __repr__(self) -> str:
+        return f"ApiKey(id={self.id!r}, actor_id={self.actor_id!r})"
+
+
 class ActorPermission(Base):
     """One permission granted to one actor."""
 

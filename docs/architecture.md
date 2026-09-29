@@ -41,11 +41,12 @@ semantic tools and workflows and never get unrestricted SQL access.
 
 Dependency rules:
 
-- Dependencies point downward only. In packages: `kernel` ← `objects` ← `workflow`.
-  The Accounting Object layer sits above the kernel and depends on it; the workflow
-  engine sits above both. `tests/unit/test_layering.py` fails if the kernel imports
-  either layer above it, or the object layer imports the workflow. That is what
-  guarantees no report can read an Accounting Object.
+- Dependencies point downward only. In packages: `kernel` ← `objects` ← `workflow` ←
+  `api`. The Accounting Object layer sits above the kernel; the workflow engine above
+  both; the REST interface above everything. `tests/unit/test_layering.py` fails if a
+  layer imports one above it, or if any domain layer imports FastAPI, Starlette,
+  uvicorn, Pydantic, or MCP. That is what guarantees no report can read an Accounting
+  Object and the domain never depends on an interface.
 - The diagram draws the kernel and the workflow engine side by side because they are
   peers in purpose: one decides what is valid, the other who may act and when. In
   code the workflow wraps the kernel, so it sits above it.
@@ -70,7 +71,7 @@ Persistence details (table names, keys, SQL) do not leak into the agent interfac
 
 ## Package layout
 
-Current state (Phase 6):
+Current state (Phase 7):
 
 ```text
 src/opensumma/
@@ -105,6 +106,19 @@ src/opensumma/
                             append-only
         audit.py            recording audited actions, capturing changes made outside
                             them, reading the log, and verifying its chain
+    api/                the REST interface (FastAPI), above everything else
+        app.py              create_app(): routers, error handlers, /health
+        dependencies.py     the request's session, calling actor, and unit of work
+        errors.py           refusals as HTTP responses
+        schemas.py          request and response bodies (Pydantic)
+        views.py            domain records as the interface presents them
+        master_data.py      accounts, balances, periods, dimensions, counterparties
+        journal.py          journal entries through the workflow, and the ledger
+        reports.py          trial balance, income statement, balance sheet, general
+                            ledger
+        objects.py          accounting objects through the workflow
+        audit.py            the audit log, page by page
+        __main__.py         python -m opensumma.api
         actors.py           actor services and the permission check
         machine.py          the transition tables, and recording transitions
         entries.py          propose, validate, submit, approve, reject, post, reverse,
@@ -183,6 +197,37 @@ table, since they would escape the capture; raw SQL remains the boundary.
 
 Modules for later layers are added in the phase that needs them (see
 [roadmap.md](roadmap.md)). There are no empty placeholder packages.
+
+## REST interface
+
+Implemented in `opensumma.api` (Phase 7). It is a thin adapter: reads call the
+kernel and object layer, and every change is a workflow operation, so it holds no
+accounting logic of its own.
+
+- **Identity.** A caller sends an actor's API key as `Authorization: Bearer <key>`.
+  Keys are issued with `issue_api_key` and stored only as SHA-256 hashes, in the
+  workflow layer; `revoke_api_keys` revokes them. Trusting a header that merely names
+  an actor would let an agent claim to be its approver.
+- **Permissions.** Every read requires READ_ONLY. Every change requires whatever the
+  workflow operation requires, and is audited by it.
+- **One unit of work per request.** A request gets its own session. An action that
+  succeeds is committed; one a rule refuses is committed too, which persists only its
+  audit event, since a refusal changes nothing else; any other failure rolls back.
+- **Refusals.** Every refusal is answered with the same JSON the audit log records:
+  the error, its message, and what it names (issue codes, a missing permission, the
+  states an action is allowed from). Statuses follow the error: 401 no valid key, 403
+  not permitted, 404 unknown record, 409 not allowed in the current state, 422
+  content or input the rules reject. A request that does not match the schema gets a
+  422 `RequestValidationError` and never reaches the workflow, so it is not audited.
+- **Money as text.** Amounts are JSON strings, such as `"120.50"`, in both
+  directions. A JSON number is refused as an amount, so a float cannot enter through
+  the interface. Requests refuse fields the schema does not name.
+- **Identifiers.** Accounts are addressed by their code (`/accounts/6100`), periods by
+  their code (`/periods/2026-03`), and entries, objects, and audit events by number.
+- **Running it.** `python -m opensumma.api [--host H] [--port P] [--database-url U]`,
+  or `uvicorn --factory opensumma.api:create_app`. The schema must already be current;
+  `/health`, which needs no key, answers 503 if it is not. OpenAPI documentation is
+  served at `/docs`.
 
 ## Database
 

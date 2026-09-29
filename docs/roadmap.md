@@ -13,7 +13,7 @@ in [progress.md](../progress.md).
 | 4 | Accounting Object model and event model | Complete |
 | 5 | Workflow / state machine | Complete |
 | 6 | Audit / event log | Complete |
-| 7 | FastAPI REST interface | Not started |
+| 7 | FastAPI REST interface | Complete |
 | 8 | MCP interface | Not started |
 | 9 | Deterministic dataset generator (`erp dataset generate`) | Not started |
 | 10 | Benchmark / evaluation framework (`erp benchmark run`) | Not started |
