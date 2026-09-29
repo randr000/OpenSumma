@@ -1,6 +1,6 @@
 # Accounting Model
 
-**Status:** Phases 1 to 5 are implemented; later phases are still specification.
+**Status:** Phases 1 to 6 are implemented; later phases are still specification.
 Each section names the phase that implements it.
 
 ## Invariants
@@ -566,9 +566,10 @@ workflow. The ledger's own invariants hold on every path either way.
 
 Every transition is recorded: the subject, the action, the states before and after,
 the actor, an optional reason, and when. The history is append-only, guarded like
-posted entries. It records state changes only; the audit log (Phase 6) will record
-every meaningful action, including refused attempts, with inputs, outputs, and
-evidence.
+posted entries. It records state changes only. The audit log (Phase 6) is the broader
+record: every action, allowed or refused, with its input, output, and evidence, and
+every change made outside the workflow; see
+[agent-model.md](agent-model.md#audit).
 
 ## Settled decisions
 
@@ -596,6 +597,9 @@ evidence.
 | Content under review | Locked from submission; a rejection unlocks it |
 | Period close order | Periods close in order and reopen in reverse, so closed periods' reports never change |
 | Closing over unposted entries | Refused; they are posted or voided first |
+| What the audit log covers | Every workflow action, allowed or refused, and every change made outside the workflow; only raw SQL escapes it |
+| Tamper evidence | Audit events are hash-chained; the ORM refuses changes and `verify_audit_log` detects any beyond it |
+| Chain-of-thought in the audit log | Never stored; a reason is at most 500 characters and evidence is references |
 
 ## Open design decisions
 

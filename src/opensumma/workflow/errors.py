@@ -64,4 +64,11 @@ class PendingEntriesError(WorkflowError):
 
 
 class ImmutableHistoryError(WorkflowError):
-    """A workflow transition was changed or deleted; the history is append-only."""
+    """A workflow transition or audit event was changed or deleted.
+
+    Both histories are append-only.
+    """
+
+
+class UnauditedWriteError(WorkflowError):
+    """A bulk write was attempted, which would change records without an audit event."""

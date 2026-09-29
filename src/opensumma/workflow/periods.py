@@ -9,6 +9,9 @@ draft, a proposal, or an entry awaiting approval or posting would otherwise be
 stranded in a period that no longer accepts postings.
 """
 
+from collections.abc import Sequence
+from contextlib import AbstractContextManager
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -19,6 +22,7 @@ from opensumma.kernel import (
     JournalEntryStatus,
     PeriodStatus,
 )
+from opensumma.workflow.audit import AuditScope, audited
 from opensumma.workflow.enums import WorkflowAction
 from opensumma.workflow.errors import PendingEntriesError, PeriodSequenceError
 from opensumma.workflow.machine import (
@@ -38,78 +42,108 @@ def close_period(
     *,
     actor: Actor,
     reason: str | None = None,
+    evidence: Sequence[str] = (),
 ) -> None:
     """Close ``period`` to further postings.
 
     Every earlier period must already be closed, and no entry dated in this one
     may still be awaiting posting.
     """
-    transition = authorize(
-        ACCOUNTING_PERIOD_WORKFLOW, WorkflowAction.CLOSE, period.status, actor
-    )
-    note = reason_text(reason)
-    earlier_open = session.scalars(
-        select(AccountingPeriod.code)
-        .where(
-            AccountingPeriod.start_date < period.start_date,
-            AccountingPeriod.status == PeriodStatus.OPEN,
+    with _audited(session, "close_period", period, actor, reason, evidence) as audit:
+        transition = authorize(
+            ACCOUNTING_PERIOD_WORKFLOW, WorkflowAction.CLOSE, period.status, actor
         )
-        .order_by(AccountingPeriod.start_date)
-    ).all()
-    if earlier_open:
-        raise PeriodSequenceError(
-            f"periods close in order; close {', '.join(earlier_open)} before "
-            f"{period.code}",
-            earlier_open,
+        note = reason_text(reason)
+        earlier_open = session.scalars(
+            select(AccountingPeriod.code)
+            .where(
+                AccountingPeriod.start_date < period.start_date,
+                AccountingPeriod.status == PeriodStatus.OPEN,
+            )
+            .order_by(AccountingPeriod.start_date)
+        ).all()
+        if earlier_open:
+            raise PeriodSequenceError(
+                f"periods close in order; close {', '.join(earlier_open)} before "
+                f"{period.code}",
+                earlier_open,
+            )
+        unfinished = session.scalars(
+            select(JournalEntry.id)
+            .where(
+                JournalEntry.entry_date.between(period.start_date, period.end_date),
+                JournalEntry.status.in_(_UNFINISHED),
+            )
+            .order_by(JournalEntry.id)
+        ).all()
+        if unfinished:
+            raise PendingEntriesError(
+                f"period {period.code} has journal entries that could still be "
+                f"posted ({', '.join(str(i) for i in unfinished)}); post or void "
+                "them first",
+                unfinished,
+            )
+        before = period.status
+        kernel.close_period(period)
+        record_transition(
+            session, period, transition, actor=actor, from_status=before, reason=note
         )
-    unfinished = session.scalars(
-        select(JournalEntry.id)
-        .where(
-            JournalEntry.entry_date.between(period.start_date, period.end_date),
-            JournalEntry.status.in_(_UNFINISHED),
-        )
-        .order_by(JournalEntry.id)
-    ).all()
-    if unfinished:
-        raise PendingEntriesError(
-            f"period {period.code} has journal entries that could still be posted "
-            f"({', '.join(str(i) for i in unfinished)}); post or void them first",
-            unfinished,
-        )
-    before = period.status
-    kernel.close_period(period)
-    record_transition(
-        session, period, transition, actor=actor, from_status=before, reason=note
-    )
+        audit.output = {"status": period.status}
 
 
 def reopen_period(
-    session: Session, period: AccountingPeriod, *, actor: Actor, reason: str
+    session: Session,
+    period: AccountingPeriod,
+    *,
+    actor: Actor,
+    reason: str,
+    evidence: Sequence[str] = (),
 ) -> None:
     """Reopen ``period`` for corrections, saying why.
 
     Every later period must be open, so only the latest closed period reopens.
     """
-    transition = authorize(
-        ACCOUNTING_PERIOD_WORKFLOW, WorkflowAction.REOPEN, period.status, actor
-    )
-    note = reason_text(reason, required_for="reopen a period")
-    later_closed = session.scalars(
-        select(AccountingPeriod.code)
-        .where(
-            AccountingPeriod.start_date > period.start_date,
-            AccountingPeriod.status == PeriodStatus.CLOSED,
+    with _audited(session, "reopen_period", period, actor, reason, evidence) as audit:
+        transition = authorize(
+            ACCOUNTING_PERIOD_WORKFLOW, WorkflowAction.REOPEN, period.status, actor
         )
-        .order_by(AccountingPeriod.start_date.desc())
-    ).all()
-    if later_closed:
-        raise PeriodSequenceError(
-            f"periods reopen in reverse order; reopen {', '.join(later_closed)} "
-            f"before {period.code}",
-            later_closed,
+        note = reason_text(reason, required_for="reopen a period")
+        later_closed = session.scalars(
+            select(AccountingPeriod.code)
+            .where(
+                AccountingPeriod.start_date > period.start_date,
+                AccountingPeriod.status == PeriodStatus.CLOSED,
+            )
+            .order_by(AccountingPeriod.start_date.desc())
+        ).all()
+        if later_closed:
+            raise PeriodSequenceError(
+                f"periods reopen in reverse order; reopen {', '.join(later_closed)} "
+                f"before {period.code}",
+                later_closed,
+            )
+        before = period.status
+        kernel.reopen_period(period)
+        record_transition(
+            session, period, transition, actor=actor, from_status=before, reason=note
         )
-    before = period.status
-    kernel.reopen_period(period)
-    record_transition(
-        session, period, transition, actor=actor, from_status=before, reason=note
+        audit.output = {"status": period.status}
+
+
+def _audited(
+    session: Session,
+    action: str,
+    period: AccountingPeriod,
+    actor: Actor,
+    reason: str | None,
+    evidence: Sequence[str],
+) -> AbstractContextManager[AuditScope]:
+    return audited(
+        session,
+        actor=actor,
+        action=action,
+        subject=period,
+        input={"period": period.code},
+        reason=reason,
+        evidence=evidence,
     )

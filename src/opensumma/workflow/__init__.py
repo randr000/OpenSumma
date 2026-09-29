@@ -1,8 +1,11 @@
-"""The workflow engine: who may do what to journal entries, objects, and periods.
+"""The workflow engine: who may do what to journal entries, objects, and periods,
+and the audit log of everything that was done.
 
 Every accounting subject moves through a state machine (``machine``), and every
 move is taken by an ``Actor`` (a person, an AI agent, or the system) holding the
-permission the move needs. Each move is recorded in an append-only history.
+permission the move needs. Each move is recorded in an append-only history, and
+every action, allowed or refused, in the hash-chained audit log (``audit``), which
+also captures changes made outside the workflow.
 
 The operations here carry the names of the agent tools that will invoke them, and
 wrap the kernel and object-layer operations of the same name with state,
@@ -29,6 +32,15 @@ from opensumma.workflow.actors import (
     require_permission,
     set_actor_permissions,
 )
+from opensumma.workflow.audit import (
+    AuditScope,
+    AuditVerification,
+    audit_history,
+    audit_json,
+    audited,
+    evidence_references,
+    verify_audit_log,
+)
 from opensumma.workflow.entries import (
     approve_journal_entry,
     post_journal_entry,
@@ -39,7 +51,12 @@ from opensumma.workflow.entries import (
     validate_journal_entry,
     void_journal_entry,
 )
-from opensumma.workflow.enums import ActorType, Permission, WorkflowAction
+from opensumma.workflow.enums import (
+    ActorType,
+    AuditResult,
+    Permission,
+    WorkflowAction,
+)
 from opensumma.workflow.errors import (
     CounterpartyRequiredError,
     ImmutableHistoryError,
@@ -48,6 +65,7 @@ from opensumma.workflow.errors import (
     PeriodSequenceError,
     PermissionDeniedError,
     SegregationOfDutiesError,
+    UnauditedWriteError,
     UnknownActorError,
     WorkflowError,
 )
@@ -58,7 +76,13 @@ from opensumma.workflow.machine import (
     Transition,
     workflow_history,
 )
-from opensumma.workflow.models import Actor, ActorPermission, WorkflowTransition
+from opensumma.workflow.models import (
+    Actor,
+    ActorPermission,
+    AuditEvent,
+    WorkflowTransition,
+    audit_hash,
+)
 from opensumma.workflow.periods import close_period, reopen_period
 
 __all__ = [
@@ -68,6 +92,10 @@ __all__ = [
     "Actor",
     "ActorPermission",
     "ActorType",
+    "AuditEvent",
+    "AuditResult",
+    "AuditScope",
+    "AuditVerification",
     "CounterpartyRequiredError",
     "ImmutableHistoryError",
     "InvalidTransitionError",
@@ -77,16 +105,22 @@ __all__ = [
     "PermissionDeniedError",
     "SegregationOfDutiesError",
     "Transition",
+    "UnauditedWriteError",
     "UnknownActorError",
     "WorkflowAction",
     "WorkflowError",
     "WorkflowTransition",
     "actors",
     "approve_journal_entry",
+    "audit_hash",
+    "audit_history",
+    "audit_json",
+    "audited",
     "classify_accounting_object",
     "close_period",
     "create_actor",
     "deactivate_actor",
+    "evidence_references",
     "extract_accounting_object",
     "find_actor",
     "get_actor",
@@ -100,6 +134,7 @@ __all__ = [
     "set_actor_permissions",
     "submit_for_approval",
     "validate_journal_entry",
+    "verify_audit_log",
     "void_accounting_object",
     "void_journal_entry",
     "workflow_history",

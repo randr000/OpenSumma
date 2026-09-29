@@ -12,7 +12,7 @@ in [progress.md](../progress.md).
 | 3 | Immutable ledger and financial reports | Complete |
 | 4 | Accounting Object model and event model | Complete |
 | 5 | Workflow / state machine | Complete |
-| 6 | Audit / event log | Not started |
+| 6 | Audit / event log | Complete |
 | 7 | FastAPI REST interface | Not started |
 | 8 | MCP interface | Not started |
 | 9 | Deterministic dataset generator (`erp dataset generate`) | Not started |

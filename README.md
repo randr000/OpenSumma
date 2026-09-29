@@ -54,6 +54,7 @@ from sqlalchemy.orm import Session
 
 from opensumma.db import create_engine, init_db
 from opensumma.kernel import (
+    JournalEntry,
     JournalEntryError,
     LineInput,
     balance_sheet,
@@ -298,6 +299,34 @@ with Session(create_engine(url)) as session:
 
 The kernel's and object layer's own operations stay available to trusted Python code;
 every interface an actor can reach goes through the workflow.
+
+## The audit log
+
+Every workflow action, allowed or refused, is an audit event naming its actor, input,
+output, concise reason, and evidence references. Changes made outside the workflow
+are captured as the system's. The log is hash-chained, so it can be verified.
+Continuing the example above:
+
+```python
+from opensumma.workflow import audit_history, verify_audit_log
+
+with Session(create_engine(url)) as session:
+    entry = session.get(JournalEntry, entry.id)
+    for event in audit_history(session, subject=entry):
+        actor = event.actor.code if event.actor else "system"
+        print(event.action, actor, event.result.value)
+    # propose_journal_entry ap-agent SUCCEEDED
+    # submit_for_approval ap-agent SUCCEEDED
+    # approve_journal_entry ap-agent REFUSED
+    # approve_journal_entry maria SUCCEEDED
+    # post_journal_entry posting-service SUCCEEDED
+
+    refused = audit_history(session, subject=entry, result="REFUSED")[0]
+    print(refused.output["error"], refused.output["permission"])
+    # PermissionDeniedError APPROVER
+
+    print(verify_audit_log(session).is_intact)  # True
+```
 
 ## Documentation
 

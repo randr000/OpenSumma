@@ -43,3 +43,13 @@ class WorkflowAction(StrEnum):
     VOID = "void"
     CLOSE = "close"
     REOPEN = "reopen"
+
+
+class AuditResult(StrEnum):
+    """What came of an audited action.
+
+    REFUSED means a rule stopped it and nothing changed but the audit log itself.
+    """
+
+    SUCCEEDED = "SUCCEEDED"
+    REFUSED = "REFUSED"

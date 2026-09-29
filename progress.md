@@ -2,11 +2,11 @@
 
 ## Current Phase:
 
-Phase 5 — Workflow / state machine
+Phase 6 — Audit / event log
 
 ## Current Status:
 
-Complete. All Phase 5 acceptance criteria are satisfied. Phase 6 has not started.
+Complete. All Phase 6 acceptance criteria are satisfied. Phase 7 has not started.
 
 ## Completed:
 
@@ -35,33 +35,33 @@ with JSON business data (floats refused), append-only business events, and a
 permanent many-to-many link to the journal entries that record their impact, which is
 derived from the ledger. The kernel never imports the object layer.
 
-Phase 5 acceptance criteria:
+Phase 5 — workflow / state machine. Actors with explicit permissions; state machines
+for entries, objects, and periods as tables; approval with segregation of duties;
+posting only once approved; ordered period close; an append-only transition history.
+Counterparties replaced `entity_id`.
 
-- [x] Workflow states exist (journal entries: DRAFT through REVERSED and VOIDED;
-  objects: OBSERVED, EXTRACTED, CLASSIFIED, VOIDED; periods: OPEN, CLOSED; each state
-  machine a table in `opensumma.workflow.machine`)
-- [x] State transitions are validated (an action is refused from any state its table
-  row does not list, naming the states it is allowed from; refused steps change
-  nothing)
-- [x] Agent proposals can enter workflow (an AGENT actor observes, extracts, and
-  classifies a bill, then proposes, validates, and submits its entry; every step
-  records the agent)
-- [x] Human approval can be represented (approvals and rejections are transitions
-  naming a HUMAN actor and a reason; no one approves an entry they prepared)
-- [x] Posting requires appropriate state/permission (only from APPROVED, only by a
-  POSTER, still through the kernel's posting rules; periods close only by ADMIN, in
-  order, and not over unposted entries)
+Phase 6 acceptance criteria:
 
-Also in Phase 5, at the user's request: `entity_id` is replaced by `counterparty_id`,
-referring to vendors and customers as master data, with a fixed default cast of six
-vendors and five customers. A migration converts existing `entity_id` values.
+- [x] Audit events exist (`AuditEvent`: timestamp, actor type and id, action, object
+  type and id, input, output, result, evidence, and a concise reason)
+- [x] Human/agent/system actors are distinguishable (`actor_type` on every event; a
+  registered actor's id; only the SYSTEM may act without one, which the database
+  enforces)
+- [x] Accounting mutations create audit events (every workflow operation records one,
+  allowed or refused; every change made outside the workflow is captured as the
+  system's; bulk writes that would escape capture are refused)
+- [x] Audit records cannot be silently modified (the ORM refuses changes and deletes;
+  events are hash-chained, and `verify_audit_log` names the first event altered,
+  removed, or inserted by any means)
+- [x] Evidence references can be stored (a list of up to 50 references per event,
+  stored and read back exactly, as in the specification's example)
 
-The acceptance test follows four actors (an AP agent, a controller, a posting service,
-and a CFO) through a month: an emailed bill from observation to posting, and an
-invoice rejected for its revenue account, corrected, approved, and posted. A property
-test throws random sequences of actions by random actors at an entry and checks that
-the history stays one consistent chain, approvals come from non-preparers, nothing
-posts unapproved, and the ledger balances.
+The acceptance test records the specification's own example: an agent proposing with
+that reason and evidence, refused when it tries to post unapproved, a human
+approving, a posting service posting, and trusted code opening the books; then
+someone edits the log behind the ORM and the chain exposes it. A property test builds
+random logs and alters every field of every event in turn with raw SQL; each
+alteration must be reported at exactly that event.
 
 ## In Progress:
 
@@ -69,9 +69,9 @@ Nothing.
 
 ## Next:
 
-Phase 6 — the audit log: an audit event for every meaningful action, human, agent,
-or system, including refused attempts, with inputs, outputs, result, and evidence,
-and records that cannot be silently modified.
+Phase 7 — the FastAPI REST interface: read endpoints, journal proposal, validation,
+approval, and posting endpoints, and reports, as thin adapters over the workflow and
+the kernel, with API integration tests.
 
 ## Known Issues:
 
@@ -99,7 +99,8 @@ and records that cannot be silently modified.
   year's income statement still shows its income, which reaches into the reports
   (open decision 2).
 - READ_ONLY is defined but not enforced, because reading from Python is not gated. The
-  REST and MCP interfaces will enforce it.
+  REST and MCP interfaces will enforce it. Reads are not audited either; the
+  interfaces may record tool calls for agent trajectories (Phase 10).
 - Offline SQL generation (`alembic upgrade head --sql`) does not work for SQLite past the
   Phase 2 migration, because batch mode must read the live table it rebuilds. It works
   for PostgreSQL, where it is useful, and a test keeps it working there.
@@ -111,71 +112,75 @@ and records that cannot be silently modified.
 - A database migrated from Phase 4 gets one counterparty per distinct `entity_id`,
   with the kind inferred from the objects that named it (a customer only if every
   such object was a customer document). Converted counterparties are worth reviewing.
-- The workflow history records state changes, with their actor and reason, but not
-  refused attempts, inputs, or evidence; the audit log (Phase 6) will.
 - Operations on the kernel or object layer called directly, outside the workflow,
-  leave no workflow history.
+  leave no workflow history; they are in the audit log, as the system's changes.
+- Audit events are part of the caller's unit of work. A refused action changes
+  nothing else, so committing afterwards persists its event, but a caller that rolls
+  back the whole transaction discards it too. The interfaces (Phases 7 and 8) should
+  commit after a refusal.
+- Raw SQL is beyond the audit log, as it is beyond the immutability guards: a change
+  made that way to a record other than an audit event leaves no event. Changes to the
+  audit log itself are detected by `verify_audit_log`, except removing events from
+  the very end; keeping the head hash it returns elsewhere covers that.
+- Audit events are numbered with a unique sequence. On PostgreSQL, two transactions
+  auditing at once would both claim the next number and one would fail; Phase 12
+  should serialize this.
+- Capturing every change costs time: the suite runs about a third slower, since
+  seeding a chart of accounts now writes an event per row. Trusted batch code can
+  record itself as one action with `audited` instead.
 - Data filters in `search_accounting_objects` match top-level fields as text, so a
   filter of `"3"` also matches a stored integer `3`, on SQLite and PostgreSQL alike.
 
-## Design decisions made in Phase 5:
+## Design decisions made in Phase 6:
 
-Recorded in
-[docs/accounting-model.md](docs/accounting-model.md#the-workflow-phase-5) and
-[docs/agent-model.md](docs/agent-model.md).
+Recorded in [docs/agent-model.md](docs/agent-model.md#audit).
 
-1. **The workflow is a layer above the kernel and the object layer.** It wraps their
-   operations under the agent tools' names; neither depends on it, which a test
-   enforces. The kernel's posting semantics are unchanged.
-2. **The one kernel change locks an entry's content from submission onward,** so what
-   an approver approves is exactly what is posted. A rejection unlocks it.
-3. **Actors are stored, with explicitly granted permissions, none implying another.**
-   ADMIN closes and reopens periods and is not a superuser. Granting permissions is
-   trusted setup, not a workflow action.
-4. **The state machines are data:** one table per subject of actions, source states,
-   target, and permission. Checks run in a fixed order: state, permission, reason,
-   controls, content.
-5. **Segregation of duties:** whoever proposed or submitted an entry never approves it.
-6. **Validation gates submission and is repeated at approval,** since master data may
-   change in between; "Validated" in the AI-native flow is that gate, not a status.
-7. **Periods close in order and reopen in reverse, and never close over unposted
-   entries,** so a closed period's reports never change. This settles the
-   open decision on sequential close.
-8. **Counterparties replace `entity_id`** as master data in the object layer, with
-   the kind set by the object type. Classifying an object means settling its
-   counterparty, and the workflow requires one before an entry is proposed for a
-   vendor or customer document. The default cast is fixed, not random, so anything
-   built on it is reproducible.
-9. **The transition history is append-only** and records only state changes; the
-   audit log (Phase 6) is the broader record of actions.
+1. **One audit log, two sources.** Workflow operations record one event per call,
+   named like the agent tool; changes made outside any audited action are captured
+   as the system's, named `create_`, `update_`, or `delete_` and the table. Together
+   they cover every accounting change, whichever path made it.
+2. **Refused attempts are audited**, with the error and what it names, because what an
+   agent tried and was stopped from doing is what the benchmark's invalid-posting
+   and tool-use measures need.
+3. **Capture listens to what the flush writes** (mapper events), not to what the
+   session lists beforehand, so rows deleted as orphans by a cascade are captured.
+   An early version listened to the session and missed them; a test caught it.
+4. **Previous values come from the database,** read on the flush's connection,
+   because SQLAlchemy forgets them once a commit has expired an object.
+5. **Changes inside an action are not captured twice,** and changes pending before an
+   action are flushed and captured first, so none is credited to the wrong action.
+6. **Tamper evidence is a hash chain.** Each event's SHA-256 covers its content and
+   the previous hash, computed over canonical JSON, so it does not depend on the
+   database. This is what "cannot be silently modified" asks for beyond the ORM.
+7. **A reason is capped at 500 characters and evidence is references,** which keeps
+   chain-of-thought out of the log by construction.
+8. **The audit log lives in the workflow package,** because its events name actors
+   and the workflow writes them; a separate package would depend on the workflow
+   and be depended on by it.
+9. **Bulk writes are refused on every table,** since they would escape capture.
 
 ## Last Verification:
 
 2026-09-29, on Python 3.12.14 and 3.13.15:
 
-- `pytest`: 478 passed (147 unit, 297 integration, 34 acceptance), including 425
+- `pytest`: 527 passed (165 unit, 323 integration, 39 acceptance), including 455
   generated Hypothesis scenarios and 5 fixed workflow examples
 - `ruff check .`: passed
 - `ruff format --check .`: passed
 - `mypy` (strict): passed
-- The package built as a wheel containing `opensumma/workflow/` and all six
+- The package built as a wheel containing `opensumma/workflow/audit.py` and all seven
   migrations, installed non-editably into a fresh Python 3.13 environment, and the
-  whole suite, Ruff, and mypy passed against the installed package. That run found a
-  test that left SQLite connections open, which Python 3.13 reports and the suite
-  treats as an error; it now closes them.
-- `alembic upgrade head` applied all six revisions and `alembic check` reported no
-  drift. A Phase 4 database holding objects with `entity_id` values was upgraded: each
-  value became a counterparty of the inferred kind, objects pointed at it, and the
-  rebuilt table kept its CHECK constraints. Downgrading restored every `entity_id`.
-  Offline PostgreSQL SQL includes the conversion and the widened status column. Tests
-  now check all of this.
-- Mutation checks, each caught by the suite and then undone: no segregation of
-  duties; posting allowed while pending; permissions unchecked; content not locked
-  under review; periods closing or reopening out of order; closing over pending
-  entries; counterparty kinds unchecked; editable history; submission without
-  validation; approval without revalidation; proposing or classifying a bill without
-  a vendor. The workflow property test alone catches the first two; it missed
-  segregation of duties at first, because random search rarely lines up a
-  self-approval, so the telling sequences are now fixed examples.
-- Every figure in the acceptance tests was worked out by hand beforehand, and all
-  three README examples were executed and printed exactly what their comments claim.
+  whole suite, Ruff, and mypy passed against the installed package.
+- `alembic upgrade head` applied all seven revisions, `alembic check` reported no
+  drift, and `alembic downgrade base` unwound them. Offline PostgreSQL SQL includes
+  the audit table and its subject index, and a test checks it.
+- Mutation checks, each caught by the suite and then undone: refusals not recorded;
+  inserts not captured; deletes, including orphans, not captured; changes inside an
+  action captured twice; pending changes credited to the action; audit events
+  editable; bulk writes allowed; a string accepted as evidence; sequence gaps not
+  checked; the hash leaving out the previous event; and the hash leaving out each of
+  eight fields in turn. Two of these survived at first: the tamper property test
+  picked fields at random and could miss one, so it now alters every field of every
+  event; and no test forged an event and relinked its successor, which one now does.
+- Every figure in the acceptance tests was worked out beforehand, and all four README
+  examples were executed and printed exactly what their comments claim.

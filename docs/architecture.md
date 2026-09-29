@@ -70,7 +70,7 @@ Persistence details (table names, keys, SQL) do not leak into the agent interfac
 
 ## Package layout
 
-Current state (Phase 5):
+Current state (Phase 6):
 
 ```text
 src/opensumma/
@@ -98,9 +98,13 @@ src/opensumma/
         services.py         record, search, and void objects; record events; link
                             entries; derive accounting impact
     workflow/           the workflow engine, above the kernel and the object layer
-        enums.py            actor types, permissions, workflow actions
+        enums.py            actor types, permissions, workflow actions, audit results
         errors.py           the rules the workflow can reject
-        models.py           actors, their permissions, and the append-only history
+        models.py           actors, their permissions, the workflow history, and the
+                            hash-chained audit log, with the guards keeping both
+                            append-only
+        audit.py            recording audited actions, capturing changes made outside
+                            them, reading the log, and verifying its chain
         actors.py           actor services and the permission check
         machine.py          the transition tables, and recording transitions
         entries.py          propose, validate, submit, approve, reject, post, reverse,
@@ -132,7 +136,10 @@ and the kernel works without it. An object's accounting impact is read through
 
 `workflow/` wraps the kernel and object operations: its operations carry the agent
 tools' names and check state, permission, and controls before calling the operation
-of the same name beneath. The transition tables in `machine.py` are data, so the
+of the same name beneath. Each runs inside `audited`, which records it in the audit
+log. The audit log lives in this package rather than one of its own because its
+events name actors and the workflow's operations write them; a separate package
+would depend on the workflow and be depended on by it. The transition tables in `machine.py` are data, so the
 rules about when an action is allowed are in one place and can be read and tested as
 a table.
 
@@ -159,8 +166,20 @@ the object tables are refused. The `BusinessData` column type refuses floats on 
 write, bulk statements included. Details are in
 [accounting-model.md](accounting-model.md#accounting-objects-phase-4).
 
-`workflow/models.py` keeps the workflow history append-only the same way: no
-transition is changed or deleted, and bulk writes to it are refused.
+`workflow/models.py` keeps the workflow history and the audit log append-only the same
+way: no transition or audit event is changed or deleted, and bulk writes to them are
+refused. A `before_flush` hook numbers each new audit event and chains it to the one
+before by hash, however it was created, so tampering beyond the ORM is detectable by
+`verify_audit_log`.
+
+`workflow/audit.py` captures every change made outside an audited action from
+SQLAlchemy's mapper events (`after_insert`, `before_update`, `before_delete`), which
+fire for every row the flush writes, orphans deleted by a cascade included, and in
+the order it writes them. Previous values are read from the database on the flush's
+connection, because attribute history forgets them once a commit has expired an
+object. The events are added in `after_flush_postexec` and written by the same
+commit. Bulk INSERT, UPDATE, and DELETE through the session are refused on every
+table, since they would escape the capture; raw SQL remains the boundary.
 
 Modules for later layers are added in the phase that needs them (see
 [roadmap.md](roadmap.md)). There are no empty placeholder packages.

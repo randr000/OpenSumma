@@ -1,10 +1,10 @@
 # Agent Model
 
-**Status:** actors, permissions, and the workflow operations behind the mutating
-tools are implemented (Phase 5, `opensumma.workflow`), and so are the kernel and
-object operations behind the read-only tools (Phases 2 to 4). The tools themselves
-arrive with the REST and MCP interfaces (Phases 7 and 8); the audit log is Phase 6,
-the benchmark Phase 10, and example agents Phase 11.
+**Status:** actors, permissions, the workflow operations behind the mutating tools,
+and the audit log are implemented (Phases 5 and 6, `opensumma.workflow`), and so are
+the kernel and object operations behind the read-only tools (Phases 2 to 4). The
+tools themselves arrive with the REST and MCP interfaces (Phases 7 and 8); the
+benchmark is Phase 10, and example agents Phase 11.
 
 ## Principle
 
@@ -68,8 +68,8 @@ get_accounting_object   search_accounting_objects
 get_audit_history
 ```
 
-`get_open_ap` and `get_open_ar` wait on settlement between payments and bills, and
-`get_audit_history` on the audit log.
+`get_open_ap` and `get_open_ar` wait on settlement between payments and bills;
+`get_audit_history` is backed by `audit_history`.
 
 Mutating (the permission each requires):
 
@@ -105,14 +105,16 @@ entry") is scored by whether an agent reports the expected codes.
 
 ## Audit
 
-Every meaningful action records an audit event with these fields: `timestamp`,
+Implemented in `opensumma.workflow.audit`. Every meaningful action creates an audit
+event with the fields the specification lists: `occurred_at` (the timestamp),
 `actor_type`, `actor_id`, `action`, `object_type`, `object_id`, `input`, `output`,
-`result`, and `evidence`.
+`result`, and `evidence`, plus a concise `reason`.
 
-The actor types are `HUMAN`, `AGENT`, and `SYSTEM`.
-
-Audit events never contain a model's private chain-of-thought. They hold a concise reason
-and references to the supporting evidence:
+Audit events never contain a model's private chain-of-thought. They hold a concise
+reason, at most 500 characters, and references to the supporting evidence: at most
+50, each at most 200 characters, such as `vendor_id=42`. Prose belongs in the reason;
+evidence names what supports it. The specification's own example is recorded as it
+reads:
 
 ```json
 {
@@ -122,6 +124,47 @@ and references to the supporting evidence:
   "evidence": ["vendor_id=42", "historical_account=6100"]
 }
 ```
+
+### What is recorded
+
+- **Every workflow operation**, whether it SUCCEEDED or was REFUSED. The action is
+  named like the agent tool (`propose_journal_entry`, `approve_journal_entry`), the
+  object is the entry, object, or period it concerns, `input` holds the arguments
+  and `output` what came of it. A refusal records the error, its message, and what
+  it names: issue codes, the missing permission, the states an action is allowed
+  from, the entries or periods to deal with first. Refusals matter for evaluation:
+  an invalid posting an agent attempted is in the log even though nothing changed.
+- **Every change made outside the workflow**, such as by trusted code calling the
+  kernel, is captured as an event by the SYSTEM with no actor: `create_journal_entry`,
+  `update_account`, `delete_journal_line`, with the values before and after. This
+  catches rows deleted as orphans by a cascade too, because it listens to what the
+  flush actually writes. Bulk writes, which would escape it, are refused on every
+  table.
+- **A batch run by trusted code** can be recorded as one action instead of row by
+  row, by running it inside `audited(actor=None, action="generate_dataset", ...)`.
+
+Changes made inside an audited action are covered by that action's event and are not
+captured again. Changes pending before it are captured on their own first, so they
+are never credited to the action.
+
+`actor_type` tells a person (HUMAN), an AI agent (AGENT), and a process (SYSTEM)
+apart. A registered actor is named by `actor_id`; only the SYSTEM may act without
+one, which the database enforces. Audit events are part of the caller's unit of
+work: committing persists them, and a refused action changes nothing else, so its
+event is all a commit adds.
+
+### Tamper evidence
+
+Audit events are never changed or deleted through the ORM, and bulk writes to them
+are refused. Beyond the ORM, events are numbered from 1 and hash-chained: each stores
+the SHA-256 hash of its own content together with the hash of the event before it.
+`verify_audit_log` recomputes the chain and names the first event that was changed,
+removed, or inserted out of turn. Rewriting an event and relinking its successor does
+not help a forger, because the successor's hash covers the link; they would have to
+rewrite every later event. Removing events from the very end cannot be seen from the
+chain alone, so `verify_audit_log` returns the head hash for keeping elsewhere.
+
+`audit_history` reads the log, filtered by subject, actor, action, or result.
 
 ## Evaluation
 
