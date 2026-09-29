@@ -25,23 +25,51 @@ from sqlalchemy.orm import (
 )
 
 from opensumma.db import Base, TimestampMixin, enum_check, enum_column
-from opensumma.kernel.models import JournalEntry
+from opensumma.kernel.models import NAME_LENGTH, JournalEntry
 from opensumma.objects.data import BusinessData
-from opensumma.objects.enums import AccountingObjectStatus, AccountingObjectType
+from opensumma.objects.enums import (
+    AccountingObjectStatus,
+    AccountingObjectType,
+    CounterpartyKind,
+)
 from opensumma.objects.errors import ImmutableRecordError, VoidedObjectError
 from opensumma.utc import UtcDateTime, utcnow
 
 SOURCE_LENGTH = 100
-ENTITY_ID_LENGTH = 64
+COUNTERPARTY_CODE_LENGTH = 64
 EVENT_TYPE_LENGTH = 64
+
+
+class Counterparty(TimestampMixin, Base):
+    """A vendor or customer that the company does business with.
+
+    There is one company per database, so the company itself is never a
+    counterparty. Counterparties are deactivated rather than deleted, because the
+    objects that name them stay on record.
+    """
+
+    __tablename__ = "counterparty"
+    __table_args__ = (
+        CheckConstraint("length(code) > 0", name="code_not_empty"),
+        enum_check("kind", CounterpartyKind),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(COUNTERPARTY_CODE_LENGTH), unique=True)
+    name: Mapped[str] = mapped_column(String(NAME_LENGTH))
+    kind: Mapped[CounterpartyKind] = mapped_column(enum_column(CounterpartyKind))
+    is_active: Mapped[bool] = mapped_column(default=True)
+
+    def __repr__(self) -> str:
+        return f"Counterparty(code={self.code!r}, kind={self.kind.value})"
 
 
 class AccountingObject(TimestampMixin, Base):
     """A business document or event with accounting relevance, such as a vendor bill.
 
     ``occurred_at`` is when it happened in the business, ``source`` where it was
-    observed, and ``entity_id`` the counterparty it concerns, such as a vendor or a
-    customer. ``data`` holds its flexible business context as JSON.
+    observed, and ``counterparty`` the vendor or customer it concerns, if known.
+    ``data`` holds its flexible business context as JSON.
 
     An object never affects the ledger itself: journal entries record its
     accounting impact, and the kernel validates and posts them like any other.
@@ -50,9 +78,6 @@ class AccountingObject(TimestampMixin, Base):
     __tablename__ = "accounting_object"
     __table_args__ = (
         CheckConstraint("length(source) > 0", name="source_not_empty"),
-        CheckConstraint(
-            "entity_id IS NULL OR length(entity_id) > 0", name="entity_id_not_empty"
-        ),
         enum_check("object_type", AccountingObjectType),
         enum_check("status", AccountingObjectStatus),
     )
@@ -66,9 +91,12 @@ class AccountingObject(TimestampMixin, Base):
     )
     occurred_at: Mapped[datetime] = mapped_column(UtcDateTime, index=True)
     source: Mapped[str] = mapped_column(String(SOURCE_LENGTH))
-    entity_id: Mapped[str | None] = mapped_column(String(ENTITY_ID_LENGTH), index=True)
+    counterparty_id: Mapped[int | None] = mapped_column(
+        ForeignKey("counterparty.id"), index=True
+    )
     data: Mapped[dict[str, Any]] = mapped_column(BusinessData, default=dict)
 
+    counterparty: Mapped[Counterparty | None] = relationship()
     events: Mapped[list["AccountingEvent"]] = relationship(
         back_populates="accounting_object",
         order_by=lambda: [AccountingEvent.occurred_at, AccountingEvent.id],

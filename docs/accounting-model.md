@@ -1,6 +1,6 @@
 # Accounting Model
 
-**Status:** Phases 1 to 4 are implemented; later phases are still specification.
+**Status:** Phases 1 to 5 are implemented; later phases are still specification.
 Each section names the phase that implements it.
 
 ## Invariants
@@ -115,8 +115,9 @@ Implemented in `opensumma.kernel.periods`.
   periods ever match.
 - A period's end is not before its start, checked in Python and in the database.
 - Postings are accepted only into open periods (`assert_period_open()`).
-- Closing is reversible: a closed period can be reopened for corrections. Who may do so
-  is a Phase 5 question.
+- Closing is reversible: a closed period can be reopened for corrections. The kernel's
+  `close_period` and `reopen_period` do only that; the workflow engine decides who may
+  close or reopen a period and in what order (see [Controls](#controls)).
 - Period codes are free text, so a fiscal year need not follow the calendar.
   `create_calendar_year_periods()` covers the common case of twelve calendar months.
 
@@ -141,19 +142,21 @@ Implemented in `opensumma.kernel.journal` and `opensumma.kernel.models`.
 
 | Status | Meaning |
 | --- | --- |
-| DRAFT | Being prepared; not yet submitted |
-| PROPOSED | Submitted by a preparer (human or agent) |
-| PENDING_APPROVAL | Awaiting an approver |
-| APPROVED | Approved, not yet posted |
+| DRAFT | Being prepared outside the workflow, such as by trusted code |
+| PROPOSED | Proposed through the workflow by a preparer (human or agent), or returned to them |
+| PENDING_APPROVAL | Submitted, valid, and awaiting an approver; content locked |
+| APPROVED | Approved, not yet posted; content locked |
 | POSTED | Recorded in the ledger; immutable from here on |
 | REVERSED | Posted, then offset by a reversing entry; both stay in the ledger |
 | VOIDED | Abandoned before posting; never affected the ledger |
 
 The kernel moves entries between DRAFT, POSTED, REVERSED, and VOIDED. PROPOSED,
-PENDING_APPROVAL, and APPROVED belong to the workflow engine (Phase 5); the kernel
-treats them like DRAFT. The kernel posts from any status that is not yet final, and
-deciding *who* may post and *from which status* is left to the workflow engine, which
-wraps the kernel rather than changing it.
+PENDING_APPROVAL, and APPROVED belong to the workflow engine (Phase 5), which decides
+*who* may move an entry and *from which status*; see [The workflow](#the-workflow-phase-5).
+The kernel posts from any status that is not yet final: the workflow wraps it rather
+than changing it, and the kernel's own operations remain for trusted code. The one
+thing the kernel adds for the workflow is that an entry's content is locked from
+submission onward (see [Immutability](#immutability)).
 
 An entry has an accounting date, a required description, and numbered lines. A line
 names one account, carries a debit or a credit, an optional memo, and at most one value
@@ -206,6 +209,12 @@ A POSTED, REVERSED, or VOIDED entry is final. Its only permitted change is POSTE
 REVERSED, which happens when a reversal is posted. Everything else is refused with
 `ImmutableEntryError`: editing the entry, adding, removing, moving, or editing its
 lines, changing their dimension values, and deleting any of them.
+
+An entry that is PENDING_APPROVAL or APPROVED has its content locked: its date,
+description, lines, and their dimension values cannot change, and it cannot be
+deleted, but its status can (it is approved, rejected, posted, or voided). What an
+approver approved is therefore exactly what is posted. A rejected entry returns to
+PROPOSED and can be corrected again.
 
 This is enforced below the services, on every SQLAlchemy session:
 
@@ -294,8 +303,9 @@ place of a date.
 
 ### Unclosed net income
 
-Revenue and expense accounts are not yet closed into retained earnings; closing belongs
-with period close in Phase 5. Until then, the net income posted up to a balance sheet's
+Revenue and expense accounts are not yet closed into retained earnings; closing entries
+are an open decision (see [Open design decisions](#open-design-decisions)). Until
+then, the net income posted up to a balance sheet's
 date belongs to the owners without sitting in any equity account. The balance sheet
 reports it as `unclosed_net_income` and includes it in total equity:
 
@@ -320,10 +330,10 @@ through journal entries that the kernel validates and posts.
 | --- | --- |
 | `id` | Identifier |
 | `object_type` | One of the types below |
-| `status` | `OBSERVED` or `VOIDED`; see [Status](#status) |
+| `status` | `OBSERVED`, `EXTRACTED`, `CLASSIFIED`, or `VOIDED`; see [Status](#status) |
 | `occurred_at` | When it happened in the business: a timezone-aware UTC timestamp, required and never defaulted |
 | `source` | Where it was observed, such as `email`, `bank_feed`, or `vendor_portal` |
-| `entity_id` | The counterparty it concerns (a vendor, customer, or employee), if any |
+| `counterparty_id` | The vendor or customer it concerns, if known; see [Counterparties](#counterparties) |
 | `data` | Business context as JSON; see [Business data](#business-data) |
 | `created_at`, `updated_at` | When it was recorded and last changed here |
 
@@ -336,12 +346,38 @@ kernel's vocabularies.
 
 ### Status
 
-An object is `OBSERVED` from the moment it is recorded and may later be `VOIDED`.
-The workflow engine (Phase 5) adds the states in between.
+An object is `OBSERVED` from the moment it is recorded. `EXTRACTED` means its
+business data has been read from its source; `CLASSIFIED` that its counterparty is
+settled. It may be `VOIDED` from any of these. Which moves are allowed, and who may
+make them, is the workflow engine's to decide (see [The workflow](#the-workflow-phase-5)).
 
 Whether an object is recorded in the ledger is never a stored status. It is derived
 from the journal entries that record it (see [Accounting impact](#accounting-impact)),
 so an object cannot claim to be posted when the ledger says otherwise.
+
+### Counterparties
+
+A counterparty is a vendor or a customer: someone the company does business with.
+There is one company per database, so the company itself is never a counterparty,
+and nothing needs a company id. Counterparties are master data, like accounts: coded,
+named, deactivated rather than deleted, and seeded with a fixed cast of six vendors
+and five customers (`seed_counterparties`), fixed rather than random so that anything
+built on it is reproducible.
+
+An object names its counterparty by code, through `resolve_counterparty`, which
+requires the counterparty to exist, to be active, and to be the kind the object's type
+calls for:
+
+| Object types | Counterparty |
+| --- | --- |
+| `vendor_bill`, `vendor_payment`, `purchase_order` | A vendor |
+| `customer_invoice`, `customer_payment`, `sales_order` | A customer |
+| All others | Either, or none |
+
+An object need not name a counterparty when it is recorded, because the source may
+not say (a bank line reading "AMZN MKTP"); settling it is what classifying an object
+means. The workflow then refuses to classify a vendor bill without a vendor, or to
+propose an entry for one.
 
 ### Business data
 
@@ -438,6 +474,102 @@ duplicate.
    and bulk writes to these tables are refused because they would bypass the flush
    hook.
 
+## The workflow (Phase 5)
+
+Implemented in `opensumma.workflow`.
+
+The workflow decides *who* may move an accounting subject from one state to another,
+and *when*. The kernel and the object layer still decide whether the content is
+acceptable; the workflow wraps them rather than changing them.
+
+### The accounting flow
+
+The AI-native flow from the project's specification maps onto three subjects:
+
+| Stage | Where it lives |
+| --- | --- |
+| Observed | Object `OBSERVED` |
+| Extracted | Object `EXTRACTED`: business data read from the source |
+| Classified | Object `CLASSIFIED`: counterparty settled |
+| Proposed | Journal entry `PROPOSED`, linked to the object |
+| Validated | The check `submit_for_approval` requires; no entry is submitted with issues |
+| Pending Approval | Journal entry `PENDING_APPROVAL` |
+| Approved | Journal entry `APPROVED` |
+| Posted | Journal entry `POSTED`; the object's impact is derived from it |
+| Reconciled | Not yet: bank reconciliation is a later feature |
+| Closed | Accounting period `CLOSED` |
+
+Not every subject needs every stage: a bank transaction from a structured feed can be
+classified without being extracted, and a journal entry need not concern an object.
+
+### Transitions
+
+Every move is a row in a transition table (`JOURNAL_ENTRY_WORKFLOW`,
+`ACCOUNTING_OBJECT_WORKFLOW`, `ACCOUNTING_PERIOD_WORKFLOW`): an action, the states it
+may start from, the state it leads to, and the permission it needs.
+
+| Subject | Action | From | To | Permission |
+| --- | --- | --- | --- | --- |
+| Entry | propose | (new) | PROPOSED | PROPOSER |
+| Entry | submit | DRAFT, PROPOSED | PENDING_APPROVAL | PROPOSER |
+| Entry | approve | PENDING_APPROVAL | APPROVED | APPROVER |
+| Entry | reject | PENDING_APPROVAL | PROPOSED | APPROVER |
+| Entry | post | APPROVED | POSTED | POSTER |
+| Entry | reverse | POSTED | REVERSED (and a new POSTED reversal) | POSTER |
+| Entry | void | DRAFT, PROPOSED | VOIDED | PROPOSER |
+| Entry | void | PENDING_APPROVAL, APPROVED | VOIDED | APPROVER |
+| Object | observe | (new) | OBSERVED | PROPOSER |
+| Object | extract | OBSERVED, EXTRACTED, CLASSIFIED | EXTRACTED | PROPOSER |
+| Object | classify | OBSERVED, EXTRACTED, CLASSIFIED | CLASSIFIED | PROPOSER |
+| Object | void | OBSERVED, EXTRACTED, CLASSIFIED | VOIDED | APPROVER |
+| Period | close | OPEN | CLOSED | ADMIN |
+| Period | reopen | CLOSED | OPEN | ADMIN |
+
+Each operation checks, in this order, and changes nothing if any check fails:
+
+1. the action is allowed from the current state (`InvalidTransitionError`);
+2. the actor is active and holds the permission (`PermissionDeniedError`);
+3. a reason is given where one is required: to reject, void, or reopen;
+4. the workflow's controls, below;
+5. the content, through the kernel's or the object layer's own rules.
+
+### Controls
+
+- **Posting needs approval.** An entry is posted only from APPROVED, only by a POSTER,
+  and still through the kernel's posting rules: a period closed after approval stops
+  it.
+- **Segregation of duties.** An entry is never approved by an actor who proposed or
+  submitted it, even one who also holds APPROVER.
+- **Validation gates submission and approval.** An entry is submitted only if it
+  passes validation, and validated again when approved, because master data may have
+  changed in between.
+- **Counterparties before accounting.** A vendor bill is classified only with a
+  vendor, and an entry is proposed for it only once its vendor is settled; likewise
+  for customer documents.
+- **Periods close in order.** A period closes only when every earlier period is
+  closed, and reopens only when every later one is open. The closed periods are
+  therefore always the earliest, every posting falls after them, and a closed
+  period's reports never change.
+- **No stranded entries.** A period closes only when no entry dated in it could still
+  be posted: drafts, proposals, and pending or approved entries are posted or voided
+  first.
+
+### Trusted layers and actors
+
+The kernel's and object layer's operations remain available, unguarded, to trusted
+code such as the dataset generator (Phase 9), which must be able to create exactly
+the mistakes the controls exist to catch, like a bill booked without a vendor. Every
+interface an actor can reach, REST (Phase 7) and MCP (Phase 8), goes through the
+workflow. The ledger's own invariants hold on every path either way.
+
+### History
+
+Every transition is recorded: the subject, the action, the states before and after,
+the actor, an optional reason, and when. The history is append-only, guarded like
+posted entries. It records state changes only; the audit log (Phase 6) will record
+every meaningful action, including refused attempts, with inputs, outputs, and
+evidence.
+
 ## Settled decisions
 
 | Decision | Resolution |
@@ -453,35 +585,40 @@ duplicate.
 | Database triggers for immutability | Not used; session hooks enforce it (below) |
 | Report dates | Always explicit; a report never depends on today's date |
 | Companies | One company per database; no table carries a company id |
-| `entity_id` on Accounting Objects | The counterparty (vendor, customer, employee), not the company |
+| Counterparties | Vendors and customers are master data; objects reference them by `counterparty_id` (Phase 5 replaced the free-text `entity_id`) |
+| Counterparty kind | Set by the object type where it implies one; a vendor bill names a vendor |
 | Object status and the ledger | Status says whether an object stands; whether it is recorded is derived from its entries |
 | Floats in business data | Refused; amounts are strings such as `"1200.00"` |
 | Object to journal entry | A many-to-many link owned by the object layer; kernel tables unchanged |
 | Deleting objects | Never; objects are voided, events and links are permanent |
+| Who moves entries through the workflow | Actors holding explicit permissions; none implies another |
+| Approving one's own work | Never; the approver must not have proposed or submitted the entry |
+| Content under review | Locked from submission; a rejection unlocks it |
+| Period close order | Periods close in order and reopen in reverse, so closed periods' reports never change |
+| Closing over unposted entries | Refused; they are posted or voided first |
 
 ## Open design decisions
 
 These should be settled before or during the phase named.
 
-1. **Sequential period close (Phase 5).** Closing a period does not require earlier
-   periods to be closed, and reopening is unrestricted. Both belong with the workflow
-   engine and its permissions rather than with the kernel.
-2. **Required dimensions (Phase 9 or later).** Whether a dimension may be mandatory,
+1. **Required dimensions (Phase 9 or later).** Whether a dimension may be mandatory,
    globally or per account, is still open. The general ledger shows each line's
    dimensions, but no report is broken down by them yet. The dataset generator and the
    "wrong department" benchmark tasks will show which rule is useful.
-3. **Closing entries (Phase 5).** Year-end close, which moves net income into retained
-   earnings, belongs with period close. Until then the balance sheet carries net income
-   as `unclosed_net_income`.
-4. **Counterparty master data (Phase 8 or 9).** `entity_id` is an opaque identifier
-   today. A table of vendors and customers would let an unknown counterparty be
-   rejected, which the "missing vendor" error injection needs.
-5. **Typed business data (Phase 9).** Whether each object type requires fields, such
+2. **Closing entries (a later phase).** Year-end close moves net income into retained
+   earnings. It needs closing entries marked as such, so that the income statement
+   for the closed year still shows its income, which touches the reports as well as
+   the workflow. Until then the balance sheet carries net income as
+   `unclosed_net_income`, which stays correct.
+3. **Typed business data (Phase 9).** Whether each object type requires fields, such
    as a vendor bill's invoice number and amount, is open. The dataset generator will
    show what each type needs.
-6. **Settlement (Phase 8).** Which payment settles which bill, and for how much, is
+4. **Settlement (Phase 8).** Which payment settles which bill, and for how much, is
    what `get_open_ap` and `get_open_ar` need. Links to journal entries do not express
    it; that needs a relationship between objects, with amounts.
+5. **Employees as counterparties (Phase 9).** Expense reports and payroll concern
+   employees, who are neither vendors nor customers. Whether they become a third
+   counterparty kind is for the dataset generator to show.
 
 Database triggers for immutability were decided against in Phase 3. CLAUDE.md allows
 database-specific SQL only where it is unavoidable, and here it is avoidable: the only

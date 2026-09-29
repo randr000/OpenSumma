@@ -61,7 +61,7 @@ def _bill(session: Session, invoice: str = "INV-1001") -> AccountingObject:
         object_type="vendor_bill",
         occurred_at=RECEIVED,
         source="email",
-        entity_id="V-AWS",
+        counterparty="V-STRATUS",
         data={"invoice_number": invoice, "amount": "1200.00"},
     )
 
@@ -230,7 +230,7 @@ def test_one_entry_can_record_several_objects(books: Session) -> None:
         object_type="vendor_payment",
         occurred_at=RECEIVED,
         source="bank_feed",
-        entity_id="V-AWS",
+        counterparty="V-STRATUS",
     )
     entry = create_journal_entry_for_object(
         books,

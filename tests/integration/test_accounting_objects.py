@@ -16,20 +16,28 @@ from opensumma.objects import (
     AccountingObjectType,
     ImmutableRecordError,
     UnknownAccountingObjectError,
+    UnknownCounterpartyError,
     create_accounting_object,
     get_accounting_object,
     record_accounting_event,
     search_accounting_objects,
+    seed_counterparties,
 )
 
 MARCH_15 = datetime(2026, 3, 15, 9, 30, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _counterparties(session: Session) -> None:
+    seed_counterparties(session)
+    session.commit()
 
 
 def _bill(
     session: Session,
     invoice: str = "INV-1001",
     *,
-    vendor: str = "V-AWS",
+    vendor: str = "V-STRATUS",
     at: datetime = MARCH_15,
     source: str = "email",
 ) -> AccountingObject:
@@ -38,7 +46,7 @@ def _bill(
         object_type=AccountingObjectType.VENDOR_BILL,
         occurred_at=at,
         source=source,
-        entity_id=vendor,
+        counterparty=vendor,
         data={"invoice_number": invoice, "amount": "1200.00"},
     )
 
@@ -55,7 +63,7 @@ def test_an_object_is_recorded_with_every_specified_field(session: Session) -> N
         object_type=AccountingObjectType.VENDOR_BILL,
         occurred_at=MARCH_15,
         source="email",
-        entity_id="V-AWS",
+        counterparty="V-STRATUS",
         data=data,
     )
     session.commit()
@@ -67,7 +75,8 @@ def test_an_object_is_recorded_with_every_specified_field(session: Session) -> N
     assert stored.occurred_at == MARCH_15
     assert stored.occurred_at.tzinfo is UTC
     assert stored.source == "email"
-    assert stored.entity_id == "V-AWS"
+    assert stored.counterparty is not None
+    assert stored.counterparty.code == "V-STRATUS"
     assert stored.data == data
     assert stored.created_at.tzinfo is UTC
     assert stored.updated_at.tzinfo is UTC
@@ -120,11 +129,13 @@ def test_occurred_at_is_an_aware_timestamp_stored_in_utc(session: Session) -> No
         )
 
 
-def test_a_source_is_required_and_a_counterparty_is_optional(session: Session) -> None:
+def test_a_source_is_required_and_a_counterparty_is_optional_but_known(
+    session: Session,
+) -> None:
     fee = create_accounting_object(
         session, object_type="bank_transaction", occurred_at=MARCH_15, source="bank"
     )
-    assert fee.entity_id is None
+    assert fee.counterparty is None
     assert fee.data == {}
 
     for source in ("", "   ", "x" * 101):
@@ -132,13 +143,13 @@ def test_a_source_is_required_and_a_counterparty_is_optional(session: Session) -
             create_accounting_object(
                 session, object_type="expense", occurred_at=MARCH_15, source=source
             )
-    with pytest.raises(ValueError, match="entity_id"):
+    with pytest.raises(UnknownCounterpartyError):
         create_accounting_object(
             session,
             object_type="expense",
             occurred_at=MARCH_15,
             source="card",
-            entity_id=" ",
+            counterparty="V-NOBODY",
         )
 
 
@@ -191,7 +202,7 @@ def test_data_is_copied_so_later_changes_by_the_caller_do_not_leak(
 def test_objects_are_found_by_their_fields(session: Session) -> None:
     march_1 = datetime(2026, 3, 1, tzinfo=UTC)
     early = _bill(session, "INV-1", at=march_1)
-    late = _bill(session, "INV-2", vendor="V-RENT", source="portal")
+    late = _bill(session, "INV-2", vendor="V-HARBOR", source="portal")
     invoice = create_accounting_object(
         session, object_type="customer_invoice", occurred_at=MARCH_15, source="erp"
     )
@@ -203,7 +214,7 @@ def test_objects_are_found_by_their_fields(session: Session) -> None:
         early,
         late,
     ]
-    assert search_accounting_objects(session, entity_id="V-RENT") == [late]
+    assert search_accounting_objects(session, counterparty="V-HARBOR") == [late]
     assert search_accounting_objects(session, source="portal") == [late]
     assert search_accounting_objects(session, status="VOIDED") == []
     assert search_accounting_objects(
@@ -222,7 +233,7 @@ def test_objects_are_found_by_business_data_fields(session: Session) -> None:
     session.commit()
 
     assert search_accounting_objects(
-        session, entity_id="V-AWS", data={"invoice_number": "INV-1001"}
+        session, counterparty="V-STRATUS", data={"invoice_number": "INV-1001"}
     ) == [first, duplicate]
     assert search_accounting_objects(session, data={"missing": "x"}) == []
     with pytest.raises(TypeError, match="string fields"):

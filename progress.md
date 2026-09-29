@@ -2,11 +2,11 @@
 
 ## Current Phase:
 
-Phase 4 — Accounting Object model and event model
+Phase 5 — Workflow / state machine
 
 ## Current Status:
 
-Complete. All Phase 4 acceptance criteria are satisfied. Phase 5 has not started.
+Complete. All Phase 5 acceptance criteria are satisfied. Phase 6 has not started.
 
 ## Completed:
 
@@ -30,31 +30,38 @@ lines themselves; trial balance, general ledger, income statement, and balance s
 all read it through `ledger.py`, and the accounting equation holds with net income
 not yet closed carried into equity.
 
-Phase 4 acceptance criteria:
+Phase 4 — Accounting Object model and event model. Business documents as objects
+with JSON business data (floats refused), append-only business events, and a
+permanent many-to-many link to the journal entries that record their impact, which is
+derived from the ledger. The kernel never imports the object layer.
 
-- [x] AccountingObject exists (`opensumma.objects`: the specified fields, eleven object
-  types, OBSERVED and VOIDED statuses; never deleted)
-- [x] JSON business data supported (portable JSON column; strings, 64-bit integers,
-  booleans, null, arrays, and objects round-trip exactly; floats refused on every
-  write path; top-level string fields queryable)
-- [x] Business events supported (`AccountingEvent`: typed, business-time ordered,
-  append-only, distinct from workflow states and audit events)
-- [x] Object-to-accounting-impact relationship exists (a many-to-many, permanent link
-  to journal entries; `accounting_impact` derives what the ledger holds for an
-  object, reversals included, through the ledger module)
-- [x] Objects cannot bypass accounting validation (the kernel never imports the object
-  layer; entries for objects are created and posted by the kernel; no ledger state is
-  stored on objects; an object the ledger still carries cannot be voided)
+Phase 5 acceptance criteria:
 
-The acceptance test records a realistic March: a vendor bill posted to the wrong
-account, reversed, reposted, and paid; the same bill arriving twice and the duplicate
-found through its business data and voided; a purchase order whose goods-received
-event is accrued; an invoice and a proposal that cannot post. Every report figure was
-worked out by hand beforehand, and the test shows the objects' own data claiming an
-amount the ledger never recorded.
+- [x] Workflow states exist (journal entries: DRAFT through REVERSED and VOIDED;
+  objects: OBSERVED, EXTRACTED, CLASSIFIED, VOIDED; periods: OPEN, CLOSED; each state
+  machine a table in `opensumma.workflow.machine`)
+- [x] State transitions are validated (an action is refused from any state its table
+  row does not list, naming the states it is allowed from; refused steps change
+  nothing)
+- [x] Agent proposals can enter workflow (an AGENT actor observes, extracts, and
+  classifies a bill, then proposes, validates, and submits its entry; every step
+  records the agent)
+- [x] Human approval can be represented (approvals and rejections are transitions
+  naming a HUMAN actor and a reason; no one approves an entry they prepared)
+- [x] Posting requires appropriate state/permission (only from APPROVED, only by a
+  POSTER, still through the kernel's posting rules; periods close only by ADMIN, in
+  order, and not over unposted entries)
 
-A property test writes arbitrary business data to the database and reads it back
-unchanged.
+Also in Phase 5, at the user's request: `entity_id` is replaced by `counterparty_id`,
+referring to vendors and customers as master data, with a fixed default cast of six
+vendors and five customers. A migration converts existing `entity_id` values.
+
+The acceptance test follows four actors (an AP agent, a controller, a posting service,
+and a CFO) through a month: an emailed bill from observation to posting, and an
+invoice rejected for its revenue account, corrected, approved, and posted. A property
+test throws random sequences of actions by random actors at an entry and checks that
+the history stays one consistent chain, approvals come from non-preparers, nothing
+posts unapproved, and the ledger balances.
 
 ## In Progress:
 
@@ -62,9 +69,9 @@ Nothing.
 
 ## Next:
 
-Phase 5 — the workflow engine: states between observed and closed for objects and
-journal entries, validated transitions, agent proposals entering the workflow, human
-approval, and posting restricted to approved entries and to actors allowed to post.
+Phase 6 — the audit log: an audit event for every meaningful action, human, agent,
+or system, including refused attempts, with inputs, outputs, result, and evidence,
+and records that cannot be silently modified.
 
 ## Known Issues:
 
@@ -79,11 +86,20 @@ approval, and posting restricted to approved entries and to actors allowed to po
   connection could still alter a posted entry or rewrite object history. Triggers were
   decided against (see
   [docs/accounting-model.md](docs/accounting-model.md#open-design-decisions)).
-- The kernel posts from any status that is not yet final. Restricting posting to
-  APPROVED entries and to actors with POSTER permission is Phase 5's job.
+- The kernel still posts from any status that is not yet final, and the object layer
+  still records entries for objects without a counterparty. Both are deliberate: the
+  workflow enforces approval, permissions, and counterparties for every actor, and the
+  layers beneath stay open to trusted code such as the dataset generator, which must
+  be able to create the mistakes the controls catch. Nothing yet stops untrusted code
+  from calling them; the REST and MCP interfaces (Phases 7 and 8) will expose only
+  the workflow.
 - Revenue and expenses are never closed into retained earnings. The balance sheet shows
-  that income as `unclosed_net_income`; year-end close belongs with period close in
-  Phase 5.
+  that income as `unclosed_net_income`, which stays correct. Year-end closing entries
+  were not part of Phase 5: they need entries marked as closing, so that the closed
+  year's income statement still shows its income, which reaches into the reports
+  (open decision 2).
+- READ_ONLY is defined but not enforced, because reading from Python is not gated. The
+  REST and MCP interfaces will enforce it.
 - Offline SQL generation (`alembic upgrade head --sql`) does not work for SQLite past the
   Phase 2 migration, because batch mode must read the live table it rebuilds. It works
   for PostgreSQL, where it is useful, and a test keeps it working there.
@@ -92,57 +108,74 @@ approval, and posting restricted to approved entries and to actors allowed to po
   that object, which is how the contradiction is detected; nothing prevents it.
 - Business data changed in place (`obj.data["amount"] = ...`) is not saved, because
   SQLAlchemy does not see changes inside a JSON value. Assign a new value instead.
-- `entity_id` is an opaque identifier with no counterparty master data behind it, so an
-  unknown vendor is not rejected yet (open decision 4).
-- Voiding an object records no reason. Who voided it and why belongs to the audit log
-  (Phase 6).
+- A database migrated from Phase 4 gets one counterparty per distinct `entity_id`,
+  with the kind inferred from the objects that named it (a customer only if every
+  such object was a customer document). Converted counterparties are worth reviewing.
+- The workflow history records state changes, with their actor and reason, but not
+  refused attempts, inputs, or evidence; the audit log (Phase 6) will.
+- Operations on the kernel or object layer called directly, outside the workflow,
+  leave no workflow history.
 - Data filters in `search_accounting_objects` match top-level fields as text, so a
   filter of `"3"` also matches a stored integer `3`, on SQLite and PostgreSQL alike.
 
-## Design decisions made in Phase 4:
+## Design decisions made in Phase 5:
 
 Recorded in
-[docs/accounting-model.md](docs/accounting-model.md#accounting-objects-phase-4).
+[docs/accounting-model.md](docs/accounting-model.md#the-workflow-phase-5) and
+[docs/agent-model.md](docs/agent-model.md).
 
-1. **Objects are a layer above the kernel.** `opensumma.objects` depends on the
-   kernel; the kernel never imports it, which a test enforces. The only kernel change
-   is an `entry_ids` filter on `posted_activity`.
-2. **`entity_id` is the counterparty, not the company.** Only objects carry it, so a
-   company id would have meant nothing on accounts or entries. The dimensions follow
-   NetSuite's (department, location, class), where "entity" is the customer or vendor
-   on a transaction. One company per database settles open decision 1 from Phase 3.
-3. **Business events are separate from workflow states and audit events.** They record
-   what happened in the world, in business time, and are append-only.
-4. **An object's status never claims ledger state.** OBSERVED and VOIDED say whether it
-   stands; whether it is recorded is derived from its entries.
-5. **Objects link to entries from their own table, many-to-many and permanently.**
-   Linking changes nothing in the ledger, and an entry's reversals count toward the
-   object's impact automatically.
-6. **Floats are refused in business data at the column type,** so no write path can
-   put one next to an accounting amount; amounts are strings.
-7. **Voiding needs zero net impact and no pending entries,** so voiding an object can
-   never remove anything from the ledger; a voided object is final.
-8. **Shared helpers moved down a layer:** the enum column helpers into `db.py`, and
-   `ensure_utc()` into `utc.py` as the single definition of an acceptable timestamp.
+1. **The workflow is a layer above the kernel and the object layer.** It wraps their
+   operations under the agent tools' names; neither depends on it, which a test
+   enforces. The kernel's posting semantics are unchanged.
+2. **The one kernel change locks an entry's content from submission onward,** so what
+   an approver approves is exactly what is posted. A rejection unlocks it.
+3. **Actors are stored, with explicitly granted permissions, none implying another.**
+   ADMIN closes and reopens periods and is not a superuser. Granting permissions is
+   trusted setup, not a workflow action.
+4. **The state machines are data:** one table per subject of actions, source states,
+   target, and permission. Checks run in a fixed order: state, permission, reason,
+   controls, content.
+5. **Segregation of duties:** whoever proposed or submitted an entry never approves it.
+6. **Validation gates submission and is repeated at approval,** since master data may
+   change in between; "Validated" in the AI-native flow is that gate, not a status.
+7. **Periods close in order and reopen in reverse, and never close over unposted
+   entries,** so a closed period's reports never change. This settles the
+   open decision on sequential close.
+8. **Counterparties replace `entity_id`** as master data in the object layer, with
+   the kind set by the object type. Classifying an object means settling its
+   counterparty, and the workflow requires one before an entry is proposed for a
+   vendor or customer document. The default cast is fixed, not random, so anything
+   built on it is reproducible.
+9. **The transition history is append-only** and records only state changes; the
+   audit log (Phase 6) is the broader record of actions.
 
 ## Last Verification:
 
-2026-09-28, on Python 3.12.14 and 3.13.15:
+2026-09-29, on Python 3.12.14 and 3.13.15:
 
-- `pytest`: 354 passed (89 unit, 236 integration, 29 acceptance), including 275
-  generated Hypothesis scenarios
+- `pytest`: 478 passed (147 unit, 297 integration, 34 acceptance), including 425
+  generated Hypothesis scenarios and 5 fixed workflow examples
 - `ruff check .`: passed
 - `ruff format --check .`: passed
 - `mypy` (strict): passed
-- The package built as a wheel containing `opensumma/objects/` and all five
+- The package built as a wheel containing `opensumma/workflow/` and all six
   migrations, installed non-editably into a fresh Python 3.13 environment, and the
-  whole suite, Ruff, and mypy passed against the installed package.
-- `alembic upgrade head` applied all five revisions, `alembic check` reported no drift,
-  and `alembic downgrade base` unwound them. Offline PostgreSQL SQL now includes the
-  object tables, and a test checks it.
-- Mutation checks, each caught by the suite and then undone: the kernel importing the
-  object layer; voiding that ignores net ledger impact; impact that ignores
-  reversals; a business-data column that accepts floats; voided objects left
-  unguarded in the flush hook; and the ledger's entry filter letting drafts in.
-- Every figure in the acceptance test was worked out by hand before the test ran, and
-  both README examples were executed and printed exactly what their comments claim.
+  whole suite, Ruff, and mypy passed against the installed package. That run found a
+  test that left SQLite connections open, which Python 3.13 reports and the suite
+  treats as an error; it now closes them.
+- `alembic upgrade head` applied all six revisions and `alembic check` reported no
+  drift. A Phase 4 database holding objects with `entity_id` values was upgraded: each
+  value became a counterparty of the inferred kind, objects pointed at it, and the
+  rebuilt table kept its CHECK constraints. Downgrading restored every `entity_id`.
+  Offline PostgreSQL SQL includes the conversion and the widened status column. Tests
+  now check all of this.
+- Mutation checks, each caught by the suite and then undone: no segregation of
+  duties; posting allowed while pending; permissions unchecked; content not locked
+  under review; periods closing or reopening out of order; closing over pending
+  entries; counterparty kinds unchecked; editable history; submission without
+  validation; approval without revalidation; proposing or classifying a bill without
+  a vendor. The workflow property test alone catches the first two; it missed
+  segregation of duties at first, because random search rarely lines up a
+  self-approval, so the telling sequences are now fixed examples.
+- Every figure in the acceptance tests was worked out by hand beforehand, and all
+  three README examples were executed and printed exactly what their comments claim.

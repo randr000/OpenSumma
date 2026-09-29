@@ -46,8 +46,10 @@ class JournalEntryStatus(StrEnum):
     """Where a journal entry is in its life.
 
     The kernel moves entries between DRAFT, POSTED, REVERSED, and VOIDED. PROPOSED,
-    PENDING_APPROVAL, and APPROVED belong to the workflow engine (Phase 5); the
-    kernel treats them like DRAFT, as not yet recorded.
+    PENDING_APPROVAL, and APPROVED belong to the workflow engine, which decides who
+    may move an entry between them. The kernel treats them as not yet recorded, but
+    keeps the content of an entry fixed from the moment it is submitted for
+    approval, so that what an approver approves is exactly what is posted.
     """
 
     DRAFT = "DRAFT"
@@ -71,6 +73,18 @@ class JournalEntryStatus(StrEnum):
     def is_final(self) -> bool:
         """True when the entry can no longer change, apart from being reversed."""
         return self.in_ledger or self is JournalEntryStatus.VOIDED
+
+    @property
+    def is_locked(self) -> bool:
+        """True when the entry's content (date, description, lines) cannot change.
+
+        That is from submission for approval onward. A pending or approved entry may
+        still change status: it can be approved, rejected, posted, or voided.
+        """
+        return self.is_final or self in (
+            JournalEntryStatus.PENDING_APPROVAL,
+            JournalEntryStatus.APPROVED,
+        )
 
 
 # The statuses whose entries make up the ledger, in a fixed order so that the SQL

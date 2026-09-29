@@ -321,7 +321,7 @@ object_type
 status
 occurred_at
 source
-entity_id
+counterparty_id
 data
 created_at
 updated_at

@@ -5,13 +5,15 @@ import pytest
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
-import opensumma.objects  # noqa: F401  (registers the object models on Base.metadata)
+import opensumma.workflow  # noqa: F401  (registers every model on Base.metadata)
 from opensumma.db import Base, create_engine
 from opensumma.kernel import (
     create_calendar_year_periods,
     seed_chart_of_accounts,
     seed_dimensions,
 )
+from opensumma.objects import seed_counterparties
+from opensumma.workflow import Actor, ActorType, Permission, create_actor
 
 
 @pytest.fixture
@@ -46,9 +48,62 @@ def session() -> Iterator[Session]:
 
 @pytest.fixture
 def books(session: Session) -> Session:
-    """A session whose books are open: the default chart, dimensions, and 2026."""
+    """A session whose books are open: the default chart, dimensions, and
+    counterparties, and the periods of 2026."""
     seed_chart_of_accounts(session)
     seed_dimensions(session)
+    seed_counterparties(session)
     create_calendar_year_periods(session, 2026)
     session.commit()
     return session
+
+
+# A cast of workflow actors on open books. The agent and the clerk prepare entries;
+# the controller approves them; the poster posts them; the admin closes periods.
+# Each holds only what the role needs.
+
+
+def _actor(
+    session: Session, code: str, actor_type: ActorType, *permissions: Permission
+) -> Actor:
+    actor = create_actor(
+        session,
+        code=code,
+        name=code.title(),
+        actor_type=actor_type,
+        permissions=permissions,
+    )
+    session.flush()
+    return actor
+
+
+@pytest.fixture
+def agent(books: Session) -> Actor:
+    """A normal AI accounting agent: it may read and propose, nothing more."""
+    return _actor(
+        books, "je-agent", ActorType.AGENT, Permission.READ_ONLY, Permission.PROPOSER
+    )
+
+
+@pytest.fixture
+def clerk(books: Session) -> Actor:
+    return _actor(
+        books, "clerk", ActorType.HUMAN, Permission.READ_ONLY, Permission.PROPOSER
+    )
+
+
+@pytest.fixture
+def controller(books: Session) -> Actor:
+    return _actor(
+        books, "controller", ActorType.HUMAN, Permission.READ_ONLY, Permission.APPROVER
+    )
+
+
+@pytest.fixture
+def poster(books: Session) -> Actor:
+    return _actor(books, "poster", ActorType.SYSTEM, Permission.POSTER)
+
+
+@pytest.fixture
+def admin(books: Session) -> Actor:
+    return _actor(books, "admin", ActorType.HUMAN, Permission.ADMIN)

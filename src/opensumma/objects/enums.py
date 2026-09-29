@@ -25,15 +25,57 @@ class AccountingObjectType(StrEnum):
     JOURNAL_ENTRY = "journal_entry"
     RECONCILIATION = "reconciliation"
 
+    @property
+    def counterparty_kind(self) -> "CounterpartyKind | None":
+        """The kind of counterparty an object of this type concerns, if it implies one.
+
+        A vendor bill concerns a vendor and a customer invoice a customer. An expense,
+        a bank transaction, or a contract may concern either, or nobody.
+        """
+        if self in _VENDOR_TYPES:
+            return CounterpartyKind.VENDOR
+        if self in _CUSTOMER_TYPES:
+            return CounterpartyKind.CUSTOMER
+        return None
+
 
 class AccountingObjectStatus(StrEnum):
-    """Whether an Accounting Object still stands.
+    """How far an Accounting Object has been processed before accounting for it.
 
-    Phase 4 needs only these two. The workflow engine (Phase 5) adds the states an
-    object passes through between being observed and being closed. Whether an
-    object is recorded in the ledger is never a stored status: it is derived from
-    the journal entries that record it (see ``accounting_impact``).
+    OBSERVED is how an object arrives. EXTRACTED means its business data has been
+    read from the source; CLASSIFIED that its counterparty is settled. VOIDED
+    withdraws it. Which transitions are allowed, and who may make them, is the
+    workflow engine's to decide.
+
+    Whether an object is recorded in the ledger is never a stored status: it is
+    derived from the journal entries that record it (see ``accounting_impact``),
+    whose own statuses carry the rest of the accounting flow.
     """
 
     OBSERVED = "OBSERVED"
+    EXTRACTED = "EXTRACTED"
+    CLASSIFIED = "CLASSIFIED"
     VOIDED = "VOIDED"
+
+
+class CounterpartyKind(StrEnum):
+    """Whom the company does business with."""
+
+    VENDOR = "VENDOR"
+    CUSTOMER = "CUSTOMER"
+
+
+_VENDOR_TYPES = frozenset(
+    {
+        AccountingObjectType.VENDOR_BILL,
+        AccountingObjectType.VENDOR_PAYMENT,
+        AccountingObjectType.PURCHASE_ORDER,
+    }
+)
+_CUSTOMER_TYPES = frozenset(
+    {
+        AccountingObjectType.CUSTOMER_INVOICE,
+        AccountingObjectType.CUSTOMER_PAYMENT,
+        AccountingObjectType.SALES_ORDER,
+    }
+)

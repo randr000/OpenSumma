@@ -11,7 +11,7 @@ in [progress.md](../progress.md).
 | 2 | Journal entries and deterministic validation | Complete |
 | 3 | Immutable ledger and financial reports | Complete |
 | 4 | Accounting Object model and event model | Complete |
-| 5 | Workflow / state machine | Not started |
+| 5 | Workflow / state machine | Complete |
 | 6 | Audit / event log | Not started |
 | 7 | FastAPI REST interface | Not started |
 | 8 | MCP interface | Not started |

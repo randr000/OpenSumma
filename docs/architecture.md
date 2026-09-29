@@ -41,14 +41,22 @@ semantic tools and workflows and never get unrestricted SQL access.
 
 Dependency rules:
 
-- Dependencies point downward only. The Accounting Object layer (`opensumma.objects`)
-  sits above the accounting kernel and depends on it; the kernel never imports it, and
-  `tests/unit/test_layering.py` fails if it does. That is what guarantees no report can
-  read an Accounting Object.
+- Dependencies point downward only. In packages: `kernel` ← `objects` ← `workflow`.
+  The Accounting Object layer sits above the kernel and depends on it; the workflow
+  engine sits above both. `tests/unit/test_layering.py` fails if the kernel imports
+  either layer above it, or the object layer imports the workflow. That is what
+  guarantees no report can read an Accounting Object.
+- The diagram draws the kernel and the workflow engine side by side because they are
+  peers in purpose: one decides what is valid, the other who may act and when. In
+  code the workflow wraps the kernel, so it sits above it.
 - The domain services, accounting kernel, and workflow engine never import FastAPI or MCP.
 - The accounting kernel is usable directly from Python, with no server running.
 - REST and MCP are thin adapters over the same application API. Neither contains
   accounting logic, and both are subject to the same validation.
+- Every interface an actor can reach goes through the workflow, where actors and
+  permissions exist. The kernel and object layer beneath stay unguarded for trusted
+  code, such as the dataset generator, which must be able to create the mistakes the
+  workflow's controls exist to catch. The ledger's own invariants hold on every path.
 
 ## Three distinct models
 
@@ -62,7 +70,7 @@ Persistence details (table names, keys, SQL) do not leak into the agent interfac
 
 ## Package layout
 
-Current state (Phase 4):
+Current state (Phase 5):
 
 ```text
 src/opensumma/
@@ -81,13 +89,24 @@ src/opensumma/
         reports.py          trial balance, general ledger, income statement, balance sheet
         seed.py             default chart of accounts and dimensions
     objects/            Accounting Objects, above the kernel
-        enums.py            object types and statuses
+        enums.py            object types, stages, and counterparty kinds
         errors.py           the rules the object layer can reject
         data.py             BusinessData JSON column type, ensure_business_data()
-        models.py           objects, business events, links to journal entries, and the
-                            session hooks guarding their history
+        models.py           counterparties, objects, business events, links to journal
+                            entries, and the session hooks guarding their history
+        counterparties.py   vendors and customers, and the default cast
         services.py         record, search, and void objects; record events; link
                             entries; derive accounting impact
+    workflow/           the workflow engine, above the kernel and the object layer
+        enums.py            actor types, permissions, workflow actions
+        errors.py           the rules the workflow can reject
+        models.py           actors, their permissions, and the append-only history
+        actors.py           actor services and the permission check
+        machine.py          the transition tables, and recording transitions
+        entries.py          propose, validate, submit, approve, reject, post, reverse,
+                            and void journal entries
+        accounting_objects.py  observe, extract, classify, and void objects
+        periods.py          close and reopen periods, in order
     migrations/         Alembic environment and revisions, shipped inside the package
 tests/
     unit/           pure logic, no database
@@ -103,12 +122,19 @@ above itself. Reports read posted data only through `ledger.py`, which is what m
 
 `opensumma.kernel` re-exports everything a caller needs, so importing it is both the
 public API and what registers the persistence models on `Base.metadata`.
-`opensumma.objects` does the same for the object layer, and imports the kernel.
+`opensumma.objects` and `opensumma.workflow` do the same for their layers, each
+importing the layers beneath it.
 
 `objects/` depends on the kernel's public API and on nothing above itself. It links
 objects to journal entries from its own table, so the kernel's tables are unchanged
 and the kernel works without it. An object's accounting impact is read through
 `ledger.py` like everything else derived from the ledger.
+
+`workflow/` wraps the kernel and object operations: its operations carry the agent
+tools' names and check state, permission, and controls before calling the operation
+of the same name beneath. The transition tables in `machine.py` are data, so the
+rules about when an action is allowed are in one place and can be read and tested as
+a table.
 
 ### Protection below the services
 
@@ -118,8 +144,9 @@ database holds row-level rules as constraints. `kernel/models.py` registers hook
 SQLAlchemy's `Session` class, so they apply to every session in the process:
 
 - `before_flush` refuses any change to a posted, reversed, or voided journal entry,
-  judged against the status recorded in the database, and refuses to let an
-  unbalanced entry, or one with fewer than two lines, into the ledger.
+  and any change to the content of one awaiting approval or approved, judged against
+  the status recorded in the database. It refuses to let an unbalanced entry, or one
+  with fewer than two lines, into the ledger.
 - `do_orm_execute` refuses bulk INSERT, UPDATE, and DELETE on journal tables, which
   would otherwise bypass the flush hook.
 
@@ -131,6 +158,9 @@ changed or deleted, a voided object cannot change or gain entries, and bulk writ
 the object tables are refused. The `BusinessData` column type refuses floats on every
 write, bulk statements included. Details are in
 [accounting-model.md](accounting-model.md#accounting-objects-phase-4).
+
+`workflow/models.py` keeps the workflow history append-only the same way: no
+transition is changed or deleted, and bulk writes to it are refused.
 
 Modules for later layers are added in the phase that needs them (see
 [roadmap.md](roadmap.md)). There are no empty placeholder packages.
@@ -183,11 +213,15 @@ Modules for later layers are added in the phase that needs them (see
 Workflow for schema changes:
 
 1. Change or add a persistence model. A new model module must be reachable from
-   `opensumma.objects`, which `migrations/env.py` imports (it imports the kernel in
-   turn), or autogenerate will not see it. A new application column type needs a
+   `opensumma.workflow`, which `migrations/env.py` imports (it imports the layers
+   beneath it in turn), or autogenerate will not see it. A new application column type needs a
    rendering rule in `env.py` too, so migrations record the physical type.
 2. `alembic revision --autogenerate -m "describe the change"`
-3. Review the generated revision. Autogenerate is a starting point, not a guarantee.
+3. Review the generated revision. Autogenerate is a starting point, not a guarantee:
+   it does not see CHECK constraints, and it drops columns rather than converting
+   their data. Write conversions as SQL statements, so offline SQL generation
+   includes them, and test a rebuilt table's CHECK constraints directly, as
+   `test_rebuilding_a_table_keeps_its_check_constraints` does.
 4. Run `pytest`. `test_models_match_migrations` fails if models and migrations disagree.
 
 ## Tooling

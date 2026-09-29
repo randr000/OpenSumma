@@ -8,8 +8,8 @@ from alembic.autogenerate.api import AutogenContext
 from sqlalchemy import create_engine
 from sqlalchemy.pool import NullPool
 
-# Registers the kernel and object models on Base.metadata; objects import the kernel.
-import opensumma.objects  # noqa: F401
+# Registers every model on Base.metadata; the workflow imports the layers below it.
+import opensumma.workflow  # noqa: F401
 from opensumma.db import Base, get_database_url
 from opensumma.money import Money
 from opensumma.objects.data import BusinessData

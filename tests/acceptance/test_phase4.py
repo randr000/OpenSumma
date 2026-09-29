@@ -6,16 +6,16 @@ accounting impact is recorded only through journal entries the kernel validates 
 posts. Every expected figure below was worked out by hand:
 
     Mar  1  Owner invests 50,000 (no object)          Dr 1111  Cr 3100  50,000.00
-    Mar  5  AWS bill INV-1001 posted to the wrong     Dr 6100  Cr 2110   1,200.00
-            account ...
+    Mar  5  Stratus bill INV-1001 posted to the       Dr 6100  Cr 2110   1,200.00
+            wrong account ...
     Mar  7  ... reversed ...                          Dr 2110  Cr 6100   1,200.00
     Mar  7  ... and posted to hosting                 Dr 5200  Cr 2110   1,200.00
-    Mar 10  Invoice INV-C-1 to Acme                   Dr 1120  Cr 4200   5,000.00
-    Mar 20  AWS paid; records payment and bill        Dr 2110  Cr 1111   1,200.00
+    Mar 10  Invoice INV-C-1 to Bluefin                Dr 1120  Cr 4200   5,000.00
+    Mar 20  Stratus paid; records payment and bill    Dr 2110  Cr 1111   1,200.00
     Mar 31  Accrual for goods received on PO-77       Dr 6700  Cr 2120     450.00
 
 Also observed but never in the ledger: a duplicate of INV-1001 arriving through the
-vendor portal (voided), and an invoice to Globex whose proposed entry does not
+vendor portal (voided), and an invoice to Cedar & Pine whose proposed entry does not
 balance and credits a parent account (it cannot post).
 
 Trial balance at Mar 31: 1111 48,800 Dr; 1120 5,000 Dr; 2120 450 Cr; 3100 50,000
@@ -67,6 +67,7 @@ from opensumma.objects import (
     objects_for_journal_entry,
     record_accounting_event,
     search_accounting_objects,
+    seed_counterparties,
     void_accounting_object,
 )
 
@@ -90,8 +91,8 @@ class March:
     bill: AccountingObject
     duplicate: AccountingObject
     payment: AccountingObject
-    acme: AccountingObject
-    globex: AccountingObject
+    bluefin: AccountingObject
+    cedar: AccountingObject
     order: AccountingObject
     misposted: JournalEntry
     reversal: JournalEntry
@@ -106,6 +107,7 @@ def march(database_url: str, engine: Engine) -> Iterator[March]:
     with Session(engine) as session:
         seed_chart_of_accounts(session)
         seed_dimensions(session)
+        seed_counterparties(session)
         create_calendar_year_periods(session, 2026)
 
         capital = create_journal_entry(
@@ -121,7 +123,7 @@ def march(database_url: str, engine: Engine) -> Iterator[March]:
             object_type=AccountingObjectType.VENDOR_BILL,
             occurred_at=_at(5),
             source="email",
-            entity_id="V-AWS",
+            counterparty="V-STRATUS",
             data={
                 "invoice_number": "INV-1001",
                 "amount": "1200.00",
@@ -132,7 +134,7 @@ def march(database_url: str, engine: Engine) -> Iterator[March]:
             session,
             bill,
             entry_date=date(2026, 3, 5),
-            description="AWS INV-1001",
+            description="Stratus INV-1001",
             lines=_lines({"6100": "1200.00"}, {"2110": "1200.00"}),
         )
         post_journal_entry(session, misposted)
@@ -143,7 +145,7 @@ def march(database_url: str, engine: Engine) -> Iterator[March]:
             session,
             bill,
             entry_date=date(2026, 3, 7),
-            description="AWS INV-1001, hosting",
+            description="Stratus INV-1001, hosting",
             lines=_lines({"5200": "1200.00"}, {"2110": "1200.00"}),
         )
         post_journal_entry(session, corrected)
@@ -153,42 +155,42 @@ def march(database_url: str, engine: Engine) -> Iterator[March]:
             object_type="vendor_bill",
             occurred_at=_at(6),
             source="vendor_portal",
-            entity_id="V-AWS",
+            counterparty="V-STRATUS",
             data={"invoice_number": "INV-1001", "amount": "1200.00"},
         )
 
-        acme = create_accounting_object(
+        bluefin = create_accounting_object(
             session,
             object_type="customer_invoice",
             occurred_at=_at(10),
             source="billing",
-            entity_id="C-ACME",
+            counterparty="C-BLUEFIN",
             data={"invoice_number": "INV-C-1", "amount": "5000.00"},
         )
         post_journal_entry(
             session,
             create_journal_entry_for_object(
                 session,
-                acme,
+                bluefin,
                 entry_date=date(2026, 3, 10),
-                description="Consulting for Acme",
+                description="Consulting for Bluefin",
                 lines=_lines({"1120": "5000.00"}, {"4200": "5000.00"}),
             ),
         )
 
-        globex = create_accounting_object(
+        cedar = create_accounting_object(
             session,
             object_type="customer_invoice",
             occurred_at=_at(12),
             source="billing",
-            entity_id="C-GLOBEX",
+            counterparty="C-CEDAR",
             data={"invoice_number": "INV-C-2", "amount": "800.00"},
         )
         proposal = create_journal_entry_for_object(
             session,
-            globex,
+            cedar,
             entry_date=date(2026, 3, 12),
-            description="Consulting for Globex",
+            description="Consulting for Cedar & Pine",
             lines=_lines({"1120": "800.00"}, {"4000": "750.00"}),
         )
 
@@ -197,14 +199,14 @@ def march(database_url: str, engine: Engine) -> Iterator[March]:
             object_type="vendor_payment",
             occurred_at=_at(20),
             source="bank_feed",
-            entity_id="V-AWS",
+            counterparty="V-STRATUS",
             data={"reference": "ACH-5521", "amount": "1200.00"},
         )
         paid = create_journal_entry_for_object(
             session,
             payment,
             entry_date=date(2026, 3, 20),
-            description="Pay AWS INV-1001",
+            description="Pay Stratus INV-1001",
             lines=_lines({"2110": "1200.00"}, {"1111": "1200.00"}),
         )
         link_journal_entry(session, bill, paid)
@@ -215,7 +217,7 @@ def march(database_url: str, engine: Engine) -> Iterator[March]:
             object_type="purchase_order",
             occurred_at=_at(1),
             source="procurement",
-            entity_id="V-DESK",
+            counterparty="V-PAPER",
             data={"po_number": "PO-77", "amount": "450.00"},
         )
         record_accounting_event(
@@ -250,8 +252,8 @@ def march(database_url: str, engine: Engine) -> Iterator[March]:
             bill=bill,
             duplicate=duplicate,
             payment=payment,
-            acme=acme,
-            globex=globex,
+            bluefin=bluefin,
+            cedar=cedar,
             order=order,
             misposted=misposted,
             reversal=reversal,
@@ -269,15 +271,16 @@ def test_accounting_objects_exist(march: March) -> None:
     assert bill.status is AccountingObjectStatus.OBSERVED
     assert bill.occurred_at == _at(5)
     assert bill.source == "email"
-    assert bill.entity_id == "V-AWS"
+    assert bill.counterparty is not None
+    assert bill.counterparty.code == "V-STRATUS"
     assert bill.created_at.tzinfo is UTC and bill.updated_at.tzinfo is UTC
     observed = search_accounting_objects(march.session)  # by occurrence
     assert observed == [
         march.order,  # Mar 1
         march.bill,  # Mar 5
         march.duplicate,  # Mar 6
-        march.acme,  # Mar 10
-        march.globex,  # Mar 12
+        march.bluefin,  # Mar 10
+        march.cedar,  # Mar 12
         march.payment,  # Mar 20
     ]
     assert [obj.object_type.value for obj in observed] == [
@@ -303,7 +306,7 @@ def test_json_business_data_is_supported(march: March) -> None:
     assert search_accounting_objects(
         march.session,
         object_type="vendor_bill",
-        entity_id="V-AWS",
+        counterparty="V-STRATUS",
         data={"invoice_number": "INV-1001"},
     ) == [march.bill, march.duplicate]
 
@@ -380,7 +383,7 @@ def test_objects_cannot_bypass_accounting_validation(march: March) -> None:
     with pytest.raises(ObjectHasAccountingImpactError):
         void_accounting_object(session, march.bill)
     with pytest.raises(ObjectHasAccountingImpactError):
-        void_accounting_object(session, march.globex)  # its draft could still post
+        void_accounting_object(session, march.cedar)  # its draft could still post
 
     # The duplicate never reached the ledger, so it can be withdrawn; once voided,
     # nothing can record it.
@@ -394,9 +397,9 @@ def test_objects_cannot_bypass_accounting_validation(march: March) -> None:
             lines=_lines({"5200": "1200.00"}, {"2110": "1200.00"}),
         )
 
-    # Abandoning the bad proposal lets the Globex invoice be withdrawn too.
+    # Abandoning the bad proposal lets the Cedar & Pine invoice be withdrawn too.
     void_journal_entry(march.proposal)
-    void_accounting_object(session, march.globex)
+    void_accounting_object(session, march.cedar)
     session.commit()
 
     # Objects are voided, never deleted.
@@ -417,7 +420,7 @@ def test_reports_derive_from_the_ledger_not_from_objects(march: March) -> None:
         (line.account_code, str(line.debit), str(line.credit)) for line in report.lines
     ] == [
         ("1111", "48800.00", "0.00"),
-        ("1120", "5000.00", "0.00"),  # the unposted Globex proposal is absent
+        ("1120", "5000.00", "0.00"),  # the unposted Cedar & Pine proposal is absent
         ("2120", "0.00", "450.00"),
         ("3100", "0.00", "50000.00"),
         ("4200", "0.00", "5000.00"),

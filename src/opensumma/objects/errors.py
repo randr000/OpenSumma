@@ -42,3 +42,16 @@ class ImmutableRecordError(AccountingObjectError):
     event supersedes, and the link between an object and a journal entry is
     permanent history.
     """
+
+
+class UnknownCounterpartyError(AccountingObjectError):
+    """No counterparty exists with the given code."""
+
+
+class InactiveCounterpartyError(AccountingObjectError):
+    """The counterparty is inactive, so no object can newly name it."""
+
+
+class CounterpartyKindError(AccountingObjectError):
+    """The counterparty is the wrong kind for the object, such as a customer on a
+    vendor bill."""

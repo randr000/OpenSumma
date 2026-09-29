@@ -365,14 +365,17 @@ class JournalLineDimension(Base):
 
 # --- Protection of recorded journal entries ------------------------------------
 #
-# A posted, reversed, or voided entry is final. The kernel's services never change
-# one, and these session hooks make sure nothing else does by accident either:
+# A posted, reversed, or voided entry is final, and an entry awaiting approval or
+# approved has its content locked. The kernel's services never change either, and
+# these session hooks make sure nothing else does by accident either:
 # every flush is checked, and bulk INSERT/UPDATE/DELETE statements, which would
 # bypass that check, are refused on journal tables outright. Raw SQL on a
 # connection is outside their reach; agents never get SQL access, so that is the
 # boundary.
 
 _JOURNAL_TABLES = frozenset({"journal_entry", "journal_line", "journal_line_dimension"})
+# What may change on an entry whose content is locked: its place in the workflow.
+_STATUS_COLUMNS = frozenset({"status", "posted_at"})
 _JOURNAL_TYPES = (JournalEntry, JournalLine, JournalLineDimension)
 
 
@@ -483,10 +486,10 @@ def _guard_recorded_entries(
     for part in parts:
         entry_ids, line_ids = touched[id(part)]
         entry_ids |= {entry_of_line[i] for i in line_ids if i in entry_of_line}
-        final = sorted(i for i in entry_ids if i in statuses and statuses[i].is_final)
-        if final:
+        locked = sorted(i for i in entry_ids if i in statuses and statuses[i].is_locked)
+        if locked:
             raise ImmutableEntryError(
-                f"journal entry {final[0]} is {statuses[final[0]].value}; "
+                f"journal entry {locked[0]} is {statuses[locked[0]].value}; "
                 "its lines and their dimensions cannot change"
             )
 
@@ -514,6 +517,18 @@ def _check_entry(
                 f"journal entry {entry_id} is {recorded.value} and cannot be "
                 f"changed ({', '.join(sorted(changed))}); reverse it and post a "
                 "correction instead"
+            )
+    elif recorded is not None and recorded.is_locked:
+        if entry in session.deleted:
+            raise ImmutableEntryError(
+                f"journal entry {entry_id} is {recorded.value} and cannot be "
+                "deleted; void it instead"
+            )
+        content = _changed_columns(entry) - _STATUS_COLUMNS
+        if content:
+            raise ImmutableEntryError(
+                f"journal entry {entry_id} is {recorded.value}, so its content is "
+                f"locked ({', '.join(sorted(content))}); reject it to change it"
             )
 
     already_in_ledger = recorded is not None and recorded.in_ledger

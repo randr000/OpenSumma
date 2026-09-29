@@ -137,9 +137,10 @@ with Session(create_engine(url)) as session:
 ## Accounting Objects
 
 Business documents such as vendor bills, invoices, and payments are Accounting
-Objects (`opensumma.objects`). They carry business context as JSON and a history of
-business events, and they reach the ledger only through journal entries that the
-kernel validates and posts. Continuing the example above:
+Objects (`opensumma.objects`). They name the vendor or customer they concern, carry
+business context as JSON and a history of business events, and reach the ledger only
+through journal entries that the kernel validates and posts. Continuing the example
+above:
 
 ```python
 from datetime import UTC, datetime
@@ -152,17 +153,20 @@ from opensumma.objects import (
     create_journal_entry_for_object,
     record_accounting_event,
     search_accounting_objects,
+    seed_counterparties,
     void_accounting_object,
 )
 
 with Session(create_engine(url)) as session:
+    seed_counterparties(session)  # six vendors and five customers
+
     # A bill arrives. Business data is JSON; amounts are strings, never floats.
     bill = create_accounting_object(
         session,
         object_type="vendor_bill",
         occurred_at=datetime(2026, 3, 20, 9, 30, tzinfo=UTC),
         source="email",
-        entity_id="V-AWS",
+        counterparty="V-STRATUS",
         data={"invoice_number": "INV-2002", "amount": "80.00"},
     )
     record_accounting_event(
@@ -178,7 +182,7 @@ with Session(create_engine(url)) as session:
         session,
         bill,
         entry_date=date(2026, 3, 20),
-        description="AWS INV-2002",
+        description="Stratus INV-2002",
         lines=[
             LineInput("5200", debit=Decimal("80.00")),
             LineInput("2110", credit=Decimal("80.00")),
@@ -194,11 +198,11 @@ with Session(create_engine(url)) as session:
         object_type="vendor_bill",
         occurred_at=datetime(2026, 3, 22, 8, 0, tzinfo=UTC),
         source="vendor_portal",
-        entity_id="V-AWS",
+        counterparty="V-STRATUS",
         data={"invoice_number": "INV-2002", "amount": "80.00"},
     )
     matches = search_accounting_objects(
-        session, entity_id="V-AWS", data={"invoice_number": "INV-2002"}
+        session, counterparty="V-STRATUS", data={"invoice_number": "INV-2002"}
     )
     print(len(matches))  # 2
     void_accounting_object(session, duplicate)  # it never reached the ledger
@@ -214,6 +218,86 @@ with Session(create_engine(url)) as session:
     print(bill.status.value, get_journal_entry(session, entry.id).status.value)
     # VOIDED REVERSED
 ```
+
+## The workflow
+
+Actors (people, AI agents, and system processes) move entries and objects through
+the workflow (`opensumma.workflow`), each step needing an explicit permission and
+each recorded. A normal agent may read and propose, but not approve or post, and no
+one approves an entry they prepared:
+
+```python
+from opensumma import workflow
+from opensumma.workflow import ActorType, Permission
+
+with Session(create_engine(url)) as session:
+    agent = workflow.create_actor(
+        session,
+        code="ap-agent",
+        name="AP agent",
+        actor_type=ActorType.AGENT,
+        permissions=[Permission.READ_ONLY, Permission.PROPOSER],
+    )
+    maria = workflow.create_actor(
+        session,
+        code="maria",
+        name="Maria Chen",
+        actor_type=ActorType.HUMAN,
+        permissions=[Permission.APPROVER],
+    )
+    poster = workflow.create_actor(
+        session,
+        code="posting-service",
+        name="Posting service",
+        actor_type=ActorType.SYSTEM,
+        permissions=[Permission.POSTER],
+    )
+
+    # The agent turns an emailed bill into a proposal ...
+    bill = workflow.observe_accounting_object(
+        session,
+        actor=agent,
+        object_type="vendor_bill",
+        occurred_at=datetime(2026, 3, 25, 10, 0, tzinfo=UTC),
+        source="email",
+        data={"raw": "Paper Trail Office Supply / INV-5 / 45.00"},
+    )
+    workflow.extract_accounting_object(
+        session, bill, actor=agent, data={"invoice_number": "INV-5", "amount": "45.00"}
+    )
+    workflow.classify_accounting_object(
+        session, bill, actor=agent, counterparty="V-PAPER"
+    )
+    entry = workflow.propose_journal_entry(
+        session,
+        actor=agent,
+        entry_date=date(2026, 3, 25),
+        description="Paper Trail INV-5",
+        lines=[
+            LineInput("6700", debit=Decimal("45.00")),
+            LineInput("2110", credit=Decimal("45.00")),
+        ],
+        accounting_object=bill,
+    )
+    workflow.submit_for_approval(session, entry, actor=agent)
+
+    # ... which it cannot approve itself.
+    try:
+        workflow.approve_journal_entry(session, entry, actor=agent)
+    except workflow.PermissionDeniedError as error:
+        print(error)  # actor ap-agent (AGENT) lacks the APPROVER permission
+
+    workflow.approve_journal_entry(session, entry, actor=maria, reason="Matches PO")
+    workflow.post_journal_entry(session, entry, actor=poster)
+    session.commit()
+    history = workflow.workflow_history(session, entry)
+    print([(step.action.value, step.actor.code) for step in history])
+    # [('propose', 'ap-agent'), ('submit', 'ap-agent'), ('approve', 'maria'),
+    #  ('post', 'posting-service')]
+```
+
+The kernel's and object layer's own operations stay available to trusted Python code;
+every interface an actor can reach goes through the workflow.
 
 ## Documentation
 

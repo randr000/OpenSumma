@@ -231,3 +231,79 @@ def test_a_draft_cannot_be_flipped_into_the_ledger_unbalanced(books: Session) ->
     draft.posted_at = utcnow()
     with pytest.raises(JournalEntryError):
         books.flush()
+
+
+@pytest.mark.parametrize(
+    "status", [JournalEntryStatus.PENDING_APPROVAL, JournalEntryStatus.APPROVED]
+)
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        _set("description", "Rent, adjusted"),
+        _set("entry_date", date(2026, 3, 1)),
+        lambda s, e: setattr(e.lines[0], "debit", Decimal("2400.00")),
+        _add_line,
+        _swap_dimension,
+        lambda s, e: s.delete(e.lines[0]),
+    ],
+    ids=[
+        "description",
+        "entry date",
+        "line amount",
+        "extra line",
+        "dimension",
+        "deleted line",
+    ],
+)
+def test_an_entry_under_review_or_approved_has_its_content_locked(
+    books: Session, status: JournalEntryStatus, tamper: Tamper
+) -> None:
+    entry = _record(books)
+    entry.status = status
+    books.commit()
+
+    tamper(books, entry)
+    with pytest.raises(ImmutableEntryError):
+        books.commit()
+
+
+@pytest.mark.parametrize(
+    ("status", "next_status"),
+    [
+        (JournalEntryStatus.PENDING_APPROVAL, JournalEntryStatus.APPROVED),
+        (JournalEntryStatus.PENDING_APPROVAL, JournalEntryStatus.PROPOSED),
+        (JournalEntryStatus.APPROVED, JournalEntryStatus.VOIDED),
+    ],
+)
+def test_a_locked_entry_may_still_move_through_the_workflow(
+    books: Session, status: JournalEntryStatus, next_status: JournalEntryStatus
+) -> None:
+    entry = _record(books)
+    entry.status = status
+    books.commit()
+
+    entry.status = next_status
+    books.commit()
+    assert entry.status is next_status
+
+
+def test_a_locked_entry_is_voided_not_deleted(books: Session) -> None:
+    entry = _record(books)
+    entry.status = JournalEntryStatus.APPROVED
+    books.commit()
+
+    books.delete(entry)
+    with pytest.raises(ImmutableEntryError, match="void it instead"):
+        books.commit()
+
+
+def test_a_rejected_entry_is_editable_again(books: Session) -> None:
+    entry = _record(books)
+    entry.status = JournalEntryStatus.PENDING_APPROVAL
+    books.commit()
+    entry.status = JournalEntryStatus.PROPOSED
+    books.commit()
+
+    entry.description = "Rent, corrected"
+    books.commit()
+    assert entry.description == "Rent, corrected"

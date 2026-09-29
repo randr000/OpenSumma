@@ -33,6 +33,7 @@ from opensumma.kernel import (
     create_journal_entry,
     posted_activity,
 )
+from opensumma.objects.counterparties import resolve_counterparty
 from opensumma.objects.data import ensure_business_data
 from opensumma.objects.enums import AccountingObjectStatus, AccountingObjectType
 from opensumma.objects.errors import (
@@ -42,12 +43,12 @@ from opensumma.objects.errors import (
     VoidedObjectError,
 )
 from opensumma.objects.models import (
-    ENTITY_ID_LENGTH,
     EVENT_TYPE_LENGTH,
     SOURCE_LENGTH,
     AccountingEvent,
     AccountingObject,
     AccountingObjectEntry,
+    Counterparty,
 )
 from opensumma.utc import ensure_utc
 
@@ -112,26 +113,43 @@ def create_accounting_object(
     object_type: AccountingObjectType | str,
     occurred_at: datetime,
     source: str,
-    entity_id: str | None = None,
+    counterparty: str | None = None,
     data: Mapping[str, Any] | None = None,
 ) -> AccountingObject:
     """Record a business document or event as an OBSERVED accounting object.
 
     ``occurred_at`` is when it happened in the business, a timezone-aware
     timestamp; it is never defaulted, so what is recorded does not depend on when
-    code runs. ``data`` is JSON business context, with amounts written as strings.
+    code runs. ``counterparty`` is the code of the vendor or customer it concerns,
+    if known; it must be active and the kind the object's type calls for. ``data``
+    is JSON business context, with amounts written as strings.
     """
+    kind = AccountingObjectType(object_type)
     obj = AccountingObject(
-        object_type=AccountingObjectType(object_type),
+        object_type=kind,
         occurred_at=ensure_utc(occurred_at),
         source=_text(source, "source", SOURCE_LENGTH),
-        entity_id=None
-        if entity_id is None
-        else _text(entity_id, "entity_id", ENTITY_ID_LENGTH),
+        counterparty=None
+        if counterparty is None
+        else resolve_counterparty(session, counterparty, object_type=kind),
         data=ensure_business_data({} if data is None else data),
     )
     session.add(obj)
     return obj
+
+
+def assign_counterparty(
+    session: Session, obj: AccountingObject, counterparty: str
+) -> None:
+    """Settle which vendor or customer ``obj`` concerns.
+
+    The counterparty must be active and the kind the object's type calls for.
+    """
+    if obj.is_voided:
+        raise VoidedObjectError(f"{_label(obj)} is VOIDED and cannot change")
+    obj.counterparty = resolve_counterparty(
+        session, counterparty, object_type=obj.object_type
+    )
 
 
 def get_accounting_object(session: Session, object_id: int) -> AccountingObject:
@@ -147,7 +165,7 @@ def search_accounting_objects(
     *,
     object_type: AccountingObjectType | str | None = None,
     status: AccountingObjectStatus | str | None = None,
-    entity_id: str | None = None,
+    counterparty: str | None = None,
     source: str | None = None,
     occurred_from: datetime | None = None,
     occurred_to: datetime | None = None,
@@ -163,8 +181,9 @@ def search_accounting_objects(
         where.append(AccountingObject.object_type == AccountingObjectType(object_type))
     if status is not None:
         where.append(AccountingObject.status == AccountingObjectStatus(status))
-    if entity_id is not None:
-        where.append(AccountingObject.entity_id == entity_id)
+    if counterparty is not None:
+        named = AccountingObject.counterparty.has(Counterparty.code == counterparty)
+        where.append(named)
     if source is not None:
         where.append(AccountingObject.source == source)
     start = None if occurred_from is None else ensure_utc(occurred_from)
