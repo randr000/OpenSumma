@@ -46,12 +46,14 @@ Dependency rules:
   the workflow engine above both; the REST and MCP interfaces above everything, side
   by side, sharing `interface`, which presents records and commits actions for both.
   The dataset generator, `datasets`, is trusted code above the workflow and beside
-  the interfaces, driven by the `erp` command line (`cli.py`).
+  the interfaces. The benchmark, `benchmark`, sits on top of the datasets and the MCP
+  interface, through whose tools its agents act. The `erp` command line (`cli.py`)
+  drives both.
   `tests/unit/test_layering.py` fails if a layer imports one above it, if any domain
   layer or the generator imports FastAPI, Starlette, uvicorn, Pydantic, or MCP, if
   `interface` imports either interface or its framework, if either interface
-  imports the other or its framework, or if anything but the command line imports
-  the generator. That is what guarantees no report can read an Accounting Object and
+  imports the other or its framework, or if anything but the command line and the
+  benchmark imports the generator, or anything but the command line the benchmark. That is what guarantees no report can read an Accounting Object and
   the domain never depends on an interface.
 - The diagram draws the kernel and the workflow engine side by side because they are
   peers in purpose: one decides what is valid, the other who may act and when. In
@@ -79,7 +81,7 @@ Persistence details (table names, keys, SQL) do not leak into the agent interfac
 
 ## Package layout
 
-Current state (Phase 9):
+Current state (Phase 10):
 
 ```text
 src/opensumma/
@@ -152,7 +154,14 @@ src/opensumma/
         recorder.py         recording a plan through the kernel and object layer
         books.py            the books' canonical content, and its fingerprint
         generator.py        plan_dataset, generate_dataset, write_dataset
-    cli.py              the erp command line: erp dataset generate
+    benchmark/          the benchmark: tasks, agents, scoring, and results
+        schema.py           the task schema: Task, TaskPrompt, Instance, Score
+        tasks.py            the sixteen tasks, their scoring and reference solutions
+        environment.py      loading a dataset; a task's workspace and actors
+        tools.py            the MCP tools for an agent, recording its trajectory
+        agents.py           the Agent protocol, the null and oracle agents
+        runner.py           running tasks, the metrics, and exporting results
+    cli.py              the erp command line: dataset generate, benchmark run
     __main__.py         python -m opensumma, the same command line
     migrations/         Alembic environment and revisions, shipped inside the package
 tests/
@@ -345,6 +354,30 @@ truth of the errors injected into them.
   ledger's guards. The whole run is one audited `generate_dataset` action. Autoflush
   is suspended and the session flushed every 500 records, which halves the time the
   hooks would otherwise take.
+
+## Benchmark
+
+Implemented in `opensumma.benchmark` (Phase 10), and described fully in
+[benchmark.md](benchmark.md). `erp benchmark run` runs an agent on sixteen tasks
+against a generated dataset and writes scores, metrics, and trajectories.
+
+- **One workspace per task.** Each task runs on its own copy of the dataset's books,
+  with the agent and a clerk registered on it, so tasks are independent and the
+  agent's changes, and their audit log, stay behind for inspection.
+- **Agents act through the MCP tools.** The runner serves the MCP server in-process,
+  as the agent's actor, and `Tools` presents it synchronously and records every call.
+  An agent is scored on the same interface any MCP client has, with the same
+  permissions, refusals, and audit, and never touches the database.
+- **Deterministic tasks and scores.** Expected answers come from the books and the
+  ground truth, never from a model. Answers are Pydantic models, which also give each
+  task's JSON schema. Sets of items are scored by F1, amounts exactly, entries line by
+  line. The metrics are counted from the answer, the trajectory, and the workspace's
+  audit log.
+- **An oracle for calibration.** Each task carries a reference solution that reaches
+  the expected answer through the tools; the `oracle` agent runs them, showing every
+  task can be solved and scored in full.
+- **Reproducible results.** Nothing in the results depends on when a run happened,
+  so a deterministic agent's results are byte-identical from run to run.
 
 ## Database
 

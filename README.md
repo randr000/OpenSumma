@@ -29,6 +29,7 @@ ruff format .            # format
 mypy                     # type-check
 alembic upgrade head     # create/upgrade the database schema
 erp dataset generate --company acme --transactions 1000 --seed 42  # a dataset
+erp benchmark run        # the benchmark's reference solutions, on the standard dataset
 ```
 
 The database URL is read from `OPENSUMMA_DATABASE_URL` and defaults to
@@ -476,10 +477,60 @@ print(first["details"]["vendor"])  # V-STRATUS
 [docs/datasets.md](docs/datasets.md) describes the business, the error types, and
 the ground truth format.
 
+## The benchmark
+
+The benchmark runs an agent on sixteen accounting tasks, from reading a balance to
+finding duplicate invoices, missing accruals, and misposted expenses, to proposing,
+validating, and correcting journal entries. Each task runs on its own copy of a
+dataset's books; the agent acts only through the MCP tools, as an actor that may read
+and propose; and every answer is scored exactly against the books and the ground
+truth.
+
+```bash
+erp benchmark tasks                                   # what the tasks are
+erp benchmark run --agent mypackage.agents:MyAgent    # scores, metrics, trajectories
+```
+
+An agent is an object with a `name` and a `run` method, which gets the task's prompt
+and the tools and returns its answer:
+
+```python
+import re
+
+from opensumma.benchmark import run_benchmark
+
+
+class BalanceReader:
+    name = "balance-reader"
+
+    def run(self, task, tools):
+        if task.id != "GL-001":
+            return {}
+        code = re.search(r"account (\d+)", task.instructions).group(1)
+        day = re.search(r"end of (\d{4}-\d{2}-\d{2})", task.instructions).group(1)
+        call = tools.call("get_account_balance", code=code, as_of=day)
+        return {"balance": call.result["balance"]} if call.ok else {}
+
+
+result = run_benchmark(
+    "datasets/demo", BalanceReader(), "results/demo", ["GL-001", "GL-003"]
+)
+print([(task.task.id, task.score.score) for task in result.tasks])
+# [('GL-001', 1.0), ('GL-003', 0.0)]
+print(result.summary()["tool_use_accuracy"])  # 1.0
+```
+
+A run writes `results.json` and `results.csv`, every tool call as a trajectory, and
+each task's books as the agent left them. The metrics are those of the project's
+specification: accounting, numerical, classification, and workflow correctness,
+tool-use accuracy, hallucination and invalid-posting rates, and auditability.
+[docs/benchmark.md](docs/benchmark.md) defines each task and metric.
+
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md): layers, boundaries, and infrastructure decisions
 - [docs/accounting-model.md](docs/accounting-model.md): accounting invariants and domain model
 - [docs/agent-model.md](docs/agent-model.md): how AI agents interact with the kernel
 - [docs/datasets.md](docs/datasets.md): generated datasets, their errors, and their ground truth
+- [docs/benchmark.md](docs/benchmark.md): the benchmark's tasks, metrics, agents, and results
 - [docs/roadmap.md](docs/roadmap.md): phases and acceptance criteria

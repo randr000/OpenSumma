@@ -23,3 +23,6 @@ dist/
 # Anchored to the root: src/opensumma/datasets/ is the generator's own package,
 # and the wheel build leaves out whatever this file ignores.
 /datasets/
+
+# Benchmark results (erp benchmark run writes them to results/ by default)
+/results/

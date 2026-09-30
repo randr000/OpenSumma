@@ -7,7 +7,9 @@ depend on the workflow engine, which wraps them, and no domain layer depends on 
 interfaces or on the frameworks they are built with. The REST and MCP interfaces
 are peers: neither imports the other or the other's framework, and what they share
 depends on neither. The dataset generator is trusted code beside the workflow: it
-uses the domain layers, none of them uses it, and it needs no interface.
+uses the domain layers, none of them uses it, and it needs no interface. The
+benchmark sits on top: it runs agents through the MCP tools on generated datasets,
+and nothing but the command line uses it.
 """
 
 import ast
@@ -27,7 +29,7 @@ FRAMEWORKS = ("fastapi", "starlette", "uvicorn", "pydantic", "mcp")
 
 # Each layer, and what it must never import: the layers above it, and the
 # frameworks the interfaces are built with.
-DATASETS = ("opensumma.datasets", "opensumma.cli")
+DATASETS = ("opensumma.datasets", "opensumma.benchmark", "opensumma.cli")
 LAYERS = {
     "kernel": (
         "opensumma.objects",
@@ -38,7 +40,9 @@ LAYERS = {
     ),
     "objects": ("opensumma.workflow", *DATASETS, *INTERFACES, *FRAMEWORKS),
     "workflow": (*DATASETS, *INTERFACES, *FRAMEWORKS),
-    "datasets": ("opensumma.cli", *INTERFACES, *FRAMEWORKS),
+    "datasets": ("opensumma.benchmark", "opensumma.cli", *INTERFACES, *FRAMEWORKS),
+    # The benchmark serves agents the MCP tools; it has no use for REST.
+    "benchmark": ("opensumma.cli", *REST),
     "interface": (*DATASETS, *REST, *MCP),
     "api": (*DATASETS, *MCP),
     "mcp": (*DATASETS, *REST),

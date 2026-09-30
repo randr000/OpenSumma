@@ -2,11 +2,11 @@
 
 ## Current Phase:
 
-Phase 9 — deterministic dataset generator
+Phase 10 — benchmark / evaluation framework
 
 ## Current Status:
 
-Complete. All Phase 9 acceptance criteria are satisfied. Phase 10 has not started.
+Complete. All Phase 10 acceptance criteria are satisfied. Phase 11 has not started.
 
 ## Completed:
 
@@ -53,33 +53,35 @@ mutating tools, kept in separate modules and annotated as such, acting as the ac
 whose API key starts the server, with the REST interface's permissions, audit, and
 JSON, which both interfaces now share in `opensumma.interface`.
 
-Phase 9 acceptance criteria:
+Phase 9 — deterministic dataset generator. `erp dataset generate` writes a
+company's year of books (exactly N transactions, planned from a seed, recorded
+through the kernel), a manifest with a content fingerprint, and the ground truth
+of eleven types of injected error, which is exactly how the books differ from the
+clean books of the same seed. See [docs/datasets.md](docs/datasets.md).
 
-- [x] Deterministic dataset generation works (`erp dataset generate --company acme
-  --transactions 1000 --seed 42`, run by the acceptance test as the installed
-  command, writes `books.db`, `manifest.json`, and `ground_truth.json`)
-- [x] Seed produces reproducible data (the same parameters give the same books,
-  fingerprint, and byte-identical manifest and ground truth; another seed gives
-  another dataset; a test pins one dataset's fingerprint and ground truth, on
-  Python 3.12 and 3.13, and another shows the plan does not depend on hash
-  randomization)
-- [x] 1,000 transaction dataset works (about 5 seconds; the REST interface serves
-  it as it is)
-- [x] 10,000 transaction dataset works (about 35 seconds, 65 customers, over 5,000
-  bank statement lines, 100 errors)
-- [x] Generated companies balance (trial balance and balance sheet at every month
-  end; cash and inventory never negative; receivables and payables equal their open
-  items)
-- [x] Error injection works (all eleven types in the specification, spread in turn,
-  no type taking more than a quarter of its candidates)
-- [x] Ground truth is preserved (every error's entries match the books, and the
-  errored books differ from the clean books of the same seed by exactly the ground
-  truth at every month end; a correction built from it validates in the workflow)
+Phase 10 acceptance criteria:
 
-The generator plans a year as plain values first, a fixed schedule of 237
-transactions and a variable business filling the rest exactly, injects errors into
-the plan, and records it through the kernel and the object layer as one audited
-action. See [docs/datasets.md](docs/datasets.md).
+- [x] Benchmark task schema exists (`Task`: id, title, category, what it measures,
+  the agent's permissions, a Pydantic answer model that gives its JSON schema, and
+  deterministic `prepare`, `score`, and reference `solve`; `erp benchmark tasks
+  --json` exports it)
+- [x] At least 10 benchmark tasks exist (sixteen: the specification's eleven
+  examples, GL-001 to JE-003, and GL-005, GL-006, AP-003, AP-004, and AR-002)
+- [x] Deterministic scoring exists (expected answers from the books and the ground
+  truth; F1 for sets of items, exact amounts, journal entries line by line and by
+  their place in the workflow; the oracle scores 1.0 on every task, the null agent
+  0; the same agent gets byte-identical results)
+- [x] Agent trajectories can be recorded (every tool call, with its arguments and
+  result or refusal, in `trajectories/<task>.jsonl`, and the answer)
+- [x] Benchmark CLI works (`erp benchmark run`, run by the acceptance test as the
+  installed command in an empty directory, generates the standard dataset and runs
+  the oracle; `--agent module:attribute` runs any agent)
+- [x] Results can be exported (`results.json` with the eight metrics of the
+  specification, `results.csv` with one row per task, and each task's books with the
+  agent's audit log)
+
+Agents act only through the MCP tools, served in-process as the actor `agent`, on
+a copy of the books per task. See [docs/benchmark.md](docs/benchmark.md).
 
 ## In Progress:
 
@@ -87,9 +89,9 @@ Nothing.
 
 ## Next:
 
-Phase 10 — the benchmark (`erp benchmark run`): a task schema and at least ten
-deterministic tasks over generated datasets (GL-001 to JE-003), scored exactly
-against their ground truth, with agent trajectories recorded and results exported.
+Phase 11 — example accounting agents: an investigation agent, a journal entry
+agent, and a duplicate-invoice agent, working through the tools rather than SQL,
+their actions audited, and evaluated by the benchmark.
 
 ## Known Issues:
 
@@ -194,68 +196,73 @@ against their ground truth, with agent trajectories recorded and results exporte
 - Generation was measured up to 10,000 transactions (about 35 seconds). It records
   row by row through the kernel, so larger datasets take proportionally longer, and
   the acceptance suite now takes about a minute more.
+- The oracle is a calibration, not a baseline: for the tasks that find errors it
+  answers from the ground truth without calling a tool. There is no real agent to
+  compare it with until Phase 11, and how hard each task is has not been measured.
+- Tasks are worded in English, and an agent may depend on the wording (the tests'
+  scripted agents read ids and dates from it). Changing a task's wording, choices,
+  expected answer, or scoring fails the test pinning the oracle's results on one
+  dataset; it must bump `BENCHMARK_VERSION` and update the pinned value.
+- AR-001 expects the invoices the recorded payments leave unpaid, so the invoice of
+  a payment the books never recorded (AR-002's error) counts as outstanding.
+- Every task grants the agent READ_ONLY and PROPOSER. The schema carries
+  permissions per task, but no task yet asks an agent to approve or post.
+- Tasks run one after another, with no time limit: an agent that hangs hangs the
+  run. Each task copies the books (about 1.2 MB for the standard dataset), and
+  trajectories keep every tool result in full, so an agent that reads the whole
+  ledger leaves a large trajectory.
 
-## Design decisions made in Phase 9:
+## Design decisions made in Phase 10:
 
-Recorded in [docs/datasets.md](docs/datasets.md) and
-[docs/architecture.md](docs/architecture.md#datasets).
+Recorded in [docs/benchmark.md](docs/benchmark.md) and
+[docs/architecture.md](docs/architecture.md#benchmark).
 
-1. **Plan, then record.** A year is planned as plain values with no database, and
-   errors injected into the plan, before anything is written. Bad parameters are
-   refused before a file exists, and the business can be tested in milliseconds.
-2. **Exactly N transactions,** each one journal entry in the clean books: a fixed
-   schedule of 237, the same for every company, and a variable business sized to
-   fill the rest.
-3. **Errors from their own random stream,** so a seed's clean and errored books
-   share the same business, and the ground truth is exactly their difference: the
-   entries as recorded and as they should be, which the tests check at every month
-   end.
-4. **Only `random.random()`,** in a stream per purpose, since Python guarantees its
-   sequence but not the algorithms of `randint`, `choice`, or `shuffle`. Datasets
-   are reproducible in content, shown by a fingerprint of the books that leaves out
-   when rows were written, rather than byte for byte.
-5. **Costs sized to gross profit.** Sales are planned first and payroll, rent, and
-   the opening balances follow from what they earn, so every size and customer mix
-   gives a plausible margin, and cash and inventory never go negative.
-6. **Trusted, beneath the workflow, as one audited action.** The workflow would
-   refuse the errors the generator must create, so it records through the kernel,
-   whose validation and guards still apply to every entry. Autoflush is suspended
-   and flushes batched, which halves the time.
-7. **The bank statement as objects.** Every operating-account movement has a
-   `bank_transaction` line; bank charges, payroll transfers, and tax payments are
-   recorded from theirs, and the rest wait, unmatched, for reconciliation.
-8. **Three files, and the agent gets one.** The books, a manifest, and the ground
-   truth. The audit log records the generation without the seed or the error count,
-   since agents can read it.
-9. **An `erp` console script** built on `argparse`, like the other entry points,
-   with `python -m opensumma` beside it; Phase 10 adds `erp benchmark run`.
+1. **Agents use the MCP tools, in-process.** The runner serves the real MCP server
+   for each task and gives the agent a synchronous `Tools` over it, so agents are
+   measured on the interface any MCP client has, with its schemas, permissions,
+   refusals, and audit, and need no transport or asynchronous code.
+2. **One workspace per task,** a copy of the books with the agent and a clerk
+   registered, so tasks are independent, the dataset is never touched, and the
+   agent's changes and audit log remain for inspection.
+3. **Expected answers from the data, never from a model.** From the books for
+   balances and open invoices; from the ground truth for errors; from what the task
+   set up for journal entries. Scores are F1 for sets of items, exact for amounts,
+   and line by line for entries, with the workflow scored apart.
+4. **The metrics come from records, not the agent's account of itself:** the
+   answer, the trajectory, and the workspace's audit log.
+5. **A task carries its reference solution.** The oracle runs it, which calibrates
+   the scoring and shows every task is solvable through the tools. It is the only
+   agent given the answer key.
+6. **Answers as Pydantic models,** which validate the answer and give its JSON
+   schema, for an LLM agent's tool definition. Fields a task does not ask for are
+   ignored; amounts are strings, as everywhere else.
+7. **Reproducible results:** no timestamps in results or trajectories, and task
+   choices drawn from a stream seeded by the dataset's seed and the task's id.
+8. **An agent is any object with `name` and `run`,** loaded by `--agent
+   module:attribute`, so Phase 11's agents, scripted or model-driven, plug in
+   without changes to the benchmark.
 
 ## Last Verification:
 
 2026-09-29, on Python 3.12.14 and 3.13.15:
 
-- `pytest`: 713 passed (220 unit, 432 integration, 61 acceptance), including the
-  acceptance tests that run the installed `erp` command and generate a
-  10,000-transaction dataset
+- `pytest`: 769 passed (245 unit, 457 integration, 67 acceptance), including the
+  acceptance tests that run `erp benchmark run` as the installed command in an
+  empty directory, and a custom agent loaded from its own module
 - `ruff check .`: passed
-- `ruff format --check .`: passed. It formats the README's Python examples too, and
-  one line of the MCP example added in Phase 8 was too long, so the Phase 8 commit
-  did not pass this check; it is fixed here.
+- `ruff format --check .`: passed, the README's examples included
 - `mypy` (strict): passed
-- The package built as a wheel containing `opensumma/datasets/`, `opensumma/cli.py`,
-  the `erp` console script, and all eight migrations; installed non-editably into a
-  fresh Python 3.13 environment, the whole suite, Ruff, and mypy passed against it.
-  An unanchored `datasets/` in `.gitignore`, meant for generated output, had left
-  the generator's own package out of the wheel; it is anchored to the root now.
-- The golden dataset test gives the same fingerprint and ground truth on Python
-  3.12 and 3.13, and the planner gives the same plan under different
-  `PYTHONHASHSEED` values.
-- Mutation checks, each caught by the suite and then undone: draws taken from
-  `randint`; a plan iterating a set; a plan one transaction short; ground truth
-  misstating the correct entry; a missing accrual whose reversal stays in the
-  books; unusual charges on weekdays; entries recorded but not posted; bank
-  statement lines not recorded; the seed written to the audit log; a fingerprint
-  including posting times; an existing dataset overwritten; and the generator
-  importing the REST interface.
-- The README's Python examples were executed in order, the dataset example
+- The package built as a wheel containing `opensumma/benchmark/`, the dataset
+  generator, and all eight migrations; installed non-editably into a fresh Python
+  3.13 environment, the whole suite, Ruff, and mypy passed against it.
+- The oracle's results on the pinned dataset hash the same on Python 3.12 and 3.13.
+- Mutation checks, each caught by the suite and then undone: an empty answer
+  agreeing with any expected answer; calls left out of the trajectory; rejected
+  calls counted as refusals; the agent served the dataset's own books; agents
+  granted approval by default; every named record taken to exist; changes counted
+  as documented without evidence; results stamped with the time of the run; an
+  entry scored though it does not record the bill; answers refusing fields a task
+  does not ask for; a correction scored without its original voided; and the
+  benchmark importing the REST interface.
+- The README's Python examples were executed in order, the benchmark example
   included, and every printed value matched.
