@@ -17,7 +17,7 @@ in [progress.md](../progress.md).
 | 8 | MCP interface | Complete |
 | 9 | Deterministic dataset generator (`erp dataset generate`) | Complete |
 | 10 | Benchmark / evaluation framework (`erp benchmark run`) | Complete |
-| 11 | Example accounting agents | Not started |
+| 11 | Example accounting agents (`opensumma.agents`) | Complete |
 | 12 | PostgreSQL compatibility | Not started |
 
 A phase is complete only when its implementation, unit, integration, and acceptance tests

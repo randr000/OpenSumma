@@ -8,7 +8,9 @@ Two agents come with the benchmark. ``null`` answers nothing, the floor every ag
 should clear. ``oracle`` is not an agent being evaluated but a calibration: it runs
 each task's reference solution, which knows the expected answer and reaches it
 through the tools, to show every task can be solved through them and scored in
-full. Other agents are named by import path, as ``package.module:attribute``.
+full. The example agents of ``opensumma.agents`` are named too, such as
+``examples``; other agents are named by import path, as
+``package.module:attribute``.
 """
 
 import importlib
@@ -52,19 +54,28 @@ class OracleAgent:
 
 
 BUILT_IN: dict[str, type[Agent]] = {"null": NullAgent, "oracle": OracleAgent}
+# The example agents of ``opensumma.agents``, which are built on the benchmark, so
+# the benchmark names them by import path rather than importing them.
+EXAMPLES: dict[str, str] = {
+    "examples": "opensumma.agents:ExampleAgents",
+    "investigator": "opensumma.agents:InvestigationAgent",
+    "journal-entry": "opensumma.agents:JournalEntryAgent",
+    "duplicate-invoice": "opensumma.agents:DuplicateInvoiceAgent",
+}
 
 
 def load_agent(spec: str) -> Agent:
-    """The agent named by ``spec``: a built-in name, or ``module:attribute``, where
-    the attribute is an agent, or a class or function that makes one with no
-    arguments."""
+    """The agent named by ``spec``: a built-in or example agent's name, or
+    ``module:attribute``, where the attribute is an agent, or a class or function
+    that makes one with no arguments."""
     if spec in BUILT_IN:
         return BUILT_IN[spec]()
-    module_name, _, attribute = spec.partition(":")
+    module_name, _, attribute = EXAMPLES.get(spec, spec).partition(":")
     if not attribute:
         raise ValueError(
             f"no built-in agent {spec!r}; built-in agents are "
-            f"{', '.join(sorted(BUILT_IN))}, and others are named module:attribute"
+            f"{', '.join(sorted([*BUILT_IN, *EXAMPLES]))}, and others are named "
+            "module:attribute"
         )
     target = getattr(importlib.import_module(module_name), attribute)
     # A class has an agent's attributes too, so it is called like any factory.

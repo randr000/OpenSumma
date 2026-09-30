@@ -113,6 +113,17 @@ solution, which knows the expected answer and reaches it through the tools: it i
 calibration that shows every task can be solved and scored in full, not an agent
 being evaluated, and the only one given the answer key.
 
+The example agents of `opensumma.agents` are named too: `investigator`,
+`journal-entry`, and `duplicate-invoice`, and `examples`, the three together. They
+are real agents, not calibrations: they apply accounting rules to the books through
+the tools and never see the answer key. [agents.md](agents.md) describes them and
+how they score.
+
+```bash
+erp benchmark run --agent examples
+erp benchmark run --agent journal-entry --tasks JE-001,JE-002,JE-003
+```
+
 ## Results
 
 A run's directory holds:
@@ -125,6 +136,10 @@ A run's directory holds:
 - `workspaces/<task>/books.db`: the books as the agent left them, with its audit
   log.
 
-Nothing in the results or trajectories depends on when the run happened, so a
-deterministic agent gets byte-identical results from every run, which the tests
-check.
+Nothing in the results depends on when the run happened, so a deterministic agent
+gets byte-identical results from every run, which the tests check. Trajectories
+record each tool result exactly as the agent saw it, so they also hold when records
+were written (`created_at`, `updated_at`, `posted_at`); for the records a task sets
+up during the run, such as the clerk's bill in JE-001 and JE-003, that is the time
+of the run. Apart from those fields, a deterministic agent's trajectories are the
+same from run to run too.

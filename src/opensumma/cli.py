@@ -93,8 +93,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument(
         "--agent",
         default="oracle",
-        help="'oracle' (the reference solutions, a calibration), 'null', or "
-        "module:attribute; default oracle",
+        help="'oracle' (the reference solutions, a calibration), 'null', an example "
+        "agent ('examples', 'investigator', 'journal-entry', 'duplicate-invoice'), "
+        "or module:attribute; default oracle",
     )
     run.add_argument("--tasks", help="task ids separated by commas; default all")
     run.add_argument(

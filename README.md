@@ -30,6 +30,7 @@ mypy                     # type-check
 alembic upgrade head     # create/upgrade the database schema
 erp dataset generate --company acme --transactions 1000 --seed 42  # a dataset
 erp benchmark run        # the benchmark's reference solutions, on the standard dataset
+erp benchmark run --agent examples  # the example agents, on the same tasks
 ```
 
 The database URL is read from `OPENSUMMA_DATABASE_URL` and defaults to
@@ -526,6 +527,30 @@ specification: accounting, numerical, classification, and workflow correctness,
 tool-use accuracy, hallucination and invalid-posting rates, and auditability.
 [docs/benchmark.md](docs/benchmark.md) defines each task and metric.
 
+## Example agents
+
+Three example agents (`opensumma.agents`) show how an agent is built on the tools,
+and are baselines to measure other agents against. They apply explicit accounting
+rules, not a language model, and reach the books only through the tools:
+
+- `investigator` answers questions about the books and finds what is wrong in
+  them: unusual charges, misclassified expenses, wrong tags and periods, bills at
+  the wrong amount or without their vendor, missing receipts and accruals;
+- `journal-entry` records a bill the way the vendor's earlier bills were recorded,
+  validates entries, and corrects invalid ones, leaving them for a person to
+  approve;
+- `duplicate-invoice` finds bills recorded, and bills paid, more than once.
+
+```bash
+erp benchmark run --agent examples       # the three together, on every task
+erp benchmark run --agent investigator   # one of them; it declines the others' tasks
+```
+
+Every change they make is audited with a concise reason and evidence, and every
+finding comes with the reason and evidence for it. On the standard dataset the three
+together score 1.0 on all sixteen tasks. [docs/agents.md](docs/agents.md) gives
+their rules, and where they fall short.
+
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md): layers, boundaries, and infrastructure decisions
@@ -533,4 +558,5 @@ tool-use accuracy, hallucination and invalid-posting rates, and auditability.
 - [docs/agent-model.md](docs/agent-model.md): how AI agents interact with the kernel
 - [docs/datasets.md](docs/datasets.md): generated datasets, their errors, and their ground truth
 - [docs/benchmark.md](docs/benchmark.md): the benchmark's tasks, metrics, agents, and results
+- [docs/agents.md](docs/agents.md): the example agents, their rules, and how they score
 - [docs/roadmap.md](docs/roadmap.md): phases and acceptance criteria

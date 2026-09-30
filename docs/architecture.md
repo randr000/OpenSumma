@@ -47,14 +47,20 @@ Dependency rules:
   by side, sharing `interface`, which presents records and commits actions for both.
   The dataset generator, `datasets`, is trusted code above the workflow and beside
   the interfaces. The benchmark, `benchmark`, sits on top of the datasets and the MCP
-  interface, through whose tools its agents act. The `erp` command line (`cli.py`)
-  drives both.
+  interface, through whose tools its agents act. The example agents, `agents`, sit
+  on top of the benchmark and see only what it hands an agent: the task's prompt
+  and the tools. The `erp` command line (`cli.py`) drives the generator and the
+  benchmark.
   `tests/unit/test_layering.py` fails if a layer imports one above it, if any domain
   layer or the generator imports FastAPI, Starlette, uvicorn, Pydantic, or MCP, if
   `interface` imports either interface or its framework, if either interface
-  imports the other or its framework, or if anything but the command line and the
-  benchmark imports the generator, or anything but the command line the benchmark. That is what guarantees no report can read an Accounting Object and
-  the domain never depends on an interface.
+  imports the other or its framework, if anything but the command line and the
+  benchmark imports the generator, or anything but the command line and the example
+  agents the benchmark, or if an example agent imports anything but the benchmark's
+  `TaskPrompt`, `Tools`, and `ToolCall`, the other agents, and the parts of the
+  standard library that compute. That is what guarantees no report can read an
+  Accounting Object, the domain never depends on an interface, and the example
+  agents reach the books only through the tools.
 - The diagram draws the kernel and the workflow engine side by side because they are
   peers in purpose: one decides what is valid, the other who may act and when. In
   code the workflow wraps the kernel, so it sits above it.
@@ -81,7 +87,7 @@ Persistence details (table names, keys, SQL) do not leak into the agent interfac
 
 ## Package layout
 
-Current state (Phase 10):
+Current state (Phase 11):
 
 ```text
 src/opensumma/
@@ -159,8 +165,15 @@ src/opensumma/
         tasks.py            the sixteen tasks, their scoring and reference solutions
         environment.py      loading a dataset; a task's workspace and actors
         tools.py            the MCP tools for an agent, recording its trajectory
-        agents.py           the Agent protocol, the null and oracle agents
+        agents.py           the Agent protocol, the null and oracle agents, and the
+                            example agents' names
         runner.py           running tasks, the metrics, and exporting results
+    agents/             example agents, on top of the benchmark, using its tools alone
+        common.py           calling tools, reading the books through them, findings
+        investigation.py    the investigation agent and its rules
+        journal_entries.py  the journal entry agent: record, check, and correct entries
+        duplicates.py       the duplicate-invoice agent
+        team.py             the three as one agent
     cli.py              the erp command line: dataset generate, benchmark run
     __main__.py         python -m opensumma, the same command line
     migrations/         Alembic environment and revisions, shipped inside the package
@@ -378,6 +391,30 @@ against a generated dataset and writes scores, metrics, and trajectories.
   task can be solved and scored in full.
 - **Reproducible results.** Nothing in the results depends on when a run happened,
   so a deterministic agent's results are byte-identical from run to run.
+  Trajectories keep each tool result as the agent saw it, so the times the task's
+  own records were written show in them.
+
+## Example agents
+
+Implemented in `opensumma.agents` (Phase 11), and described fully in
+[agents.md](agents.md): an investigation agent, a journal entry agent, and a
+duplicate-invoice agent, and the three as one.
+
+- **Built on the benchmark's agent interface.** Each is an `Agent`, with a `name`
+  and a `run` that gets the task's prompt and the tools. The benchmark names them,
+  so `--agent examples` loads them, but never imports them, since they are built on
+  it.
+- **The tools are their only way to the books.** They may import only the
+  benchmark's `TaskPrompt`, `Tools`, and `ToolCall`, one another, and the parts of
+  the standard library that compute, which the layering test enforces. They act as
+  any MCP client would, with the same permissions, refusals, and audit.
+- **Rules, not a model.** Each workflow applies explicit accounting rules to what
+  the books hold, so the agents are deterministic baselines. `Books` reads the
+  books through the tools once per task and indexes them, so a workflow's checks
+  share its reads.
+- **Auditable.** Every change is a workflow tool call with a concise reason and
+  evidence references. Findings are reported beside the answer with theirs, in a
+  field the benchmark records but does not score.
 
 ## Database
 

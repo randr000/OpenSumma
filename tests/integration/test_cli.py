@@ -111,6 +111,19 @@ def test_benchmark_run_writes_results(
     assert "not empty" in capsys.readouterr().err
 
 
+def test_benchmark_run_runs_the_example_agents_by_name(
+    small_dataset: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "run"
+    arguments = ["benchmark", "run", "--dataset", str(small_dataset), "--agent"]
+    tasks = ["--tasks", "AP-001,JE-002", "--output", str(output)]
+    assert main([*arguments, "examples", *tasks]) == 0
+    printed = capsys.readouterr().out
+    assert "Ran agent examples on 2 tasks" in printed
+    assert "accounting correctness   1.0" in printed
+    assert json.loads((output / "results.json").read_text())["agent"] == "examples"
+
+
 def test_benchmark_run_numbers_its_default_output(
     small_dataset: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

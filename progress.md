@@ -2,11 +2,11 @@
 
 ## Current Phase:
 
-Phase 10 — benchmark / evaluation framework
+Phase 11 — example accounting agents
 
 ## Current Status:
 
-Complete. All Phase 10 acceptance criteria are satisfied. Phase 11 has not started.
+Complete. All Phase 11 acceptance criteria are satisfied. Phase 12 has not started.
 
 ## Completed:
 
@@ -59,29 +59,44 @@ through the kernel), a manifest with a content fingerprint, and the ground truth
 of eleven types of injected error, which is exactly how the books differ from the
 clean books of the same seed. See [docs/datasets.md](docs/datasets.md).
 
-Phase 10 acceptance criteria:
+Phase 10 — benchmark / evaluation framework. `erp benchmark run` runs an agent on
+sixteen tasks, each on its own copy of a dataset's books, through the MCP tools
+served in-process, and scores every answer exactly against the books and the ground
+truth; it writes the eight metrics of the specification, per-task results, and
+every tool call as a trajectory. An oracle runs each task's reference solution as a
+calibration. See [docs/benchmark.md](docs/benchmark.md).
 
-- [x] Benchmark task schema exists (`Task`: id, title, category, what it measures,
-  the agent's permissions, a Pydantic answer model that gives its JSON schema, and
-  deterministic `prepare`, `score`, and reference `solve`; `erp benchmark tasks
-  --json` exports it)
-- [x] At least 10 benchmark tasks exist (sixteen: the specification's eleven
-  examples, GL-001 to JE-003, and GL-005, GL-006, AP-003, AP-004, and AR-002)
-- [x] Deterministic scoring exists (expected answers from the books and the ground
-  truth; F1 for sets of items, exact amounts, journal entries line by line and by
-  their place in the workflow; the oracle scores 1.0 on every task, the null agent
-  0; the same agent gets byte-identical results)
-- [x] Agent trajectories can be recorded (every tool call, with its arguments and
-  result or refusal, in `trajectories/<task>.jsonl`, and the answer)
-- [x] Benchmark CLI works (`erp benchmark run`, run by the acceptance test as the
-  installed command in an empty directory, generates the standard dataset and runs
-  the oracle; `--agent module:attribute` runs any agent)
-- [x] Results can be exported (`results.json` with the eight metrics of the
-  specification, `results.csv` with one row per task, and each task's books with the
-  agent's audit log)
+Phase 11 acceptance criteria:
 
-Agents act only through the MCP tools, served in-process as the actor `agent`, on
-a copy of the books per task. See [docs/benchmark.md](docs/benchmark.md).
+- [x] Example investigation agent (`InvestigationAgent`, `--agent investigator`:
+  balances, the trial balance, and open invoices from the books, and eight kinds of
+  error found by one accounting rule each; it only reads)
+- [x] Example JE agent (`JournalEntryAgent`, `--agent journal-entry`: records a bill
+  as the vendor's latest posted bills were recorded, validates, and submits only a
+  valid entry; validates a colleague's entry; voids an invalid one, citing its
+  issue codes, and records its bill afresh)
+- [x] Example duplicate-invoice agent (`DuplicateInvoiceAgent`, `--agent
+  duplicate-invoice`: bills from one vendor with the same invoice number, compared
+  as letters and digits, and payments for a bill already paid in full)
+- [x] Agents interact through tools rather than SQL (the agents may import only
+  the benchmark's `TaskPrompt`, `Tools`, and `ToolCall`, one another, and six
+  computing modules of the standard library, which the layering test enforces;
+  in every workspace the readers leave the books' fingerprint unchanged, the SYSTEM
+  records nothing but the setup, and every audit event by the agent is one of its
+  tool calls, in order)
+- [x] Agent actions are auditable (every change is a workflow tool call by the
+  AGENT `agent` with a concise reason and evidence references, such as the precedent
+  entries a proposal follows, in a verified hash chain; every read and change is in
+  the trajectory; every finding is reported beside the answer with its reason and
+  evidence)
+- [x] Benchmark can evaluate agents (`erp benchmark run --agent examples`, or any of
+  the three, run by the acceptance test as the installed command in an empty
+  directory; on the standard dataset the three together score 1.0 on all sixteen
+  tasks, with every metric at its best, and each alone 1.0 on its own tasks; the
+  same agent gets byte-identical results)
+
+The agents use no language model: they are deterministic baselines, and examples of
+an agent built on the tools. See [docs/agents.md](docs/agents.md).
 
 ## In Progress:
 
@@ -89,9 +104,8 @@ Nothing.
 
 ## Next:
 
-Phase 11 — example accounting agents: an investigation agent, a journal entry
-agent, and a duplicate-invoice agent, working through the tools rather than SQL,
-their actions audited, and evaluated by the benchmark.
+Phase 12 — PostgreSQL compatibility: the same schema, migrations, and suite on
+PostgreSQL, with audit sequence numbers serialized between concurrent transactions.
 
 ## Known Issues:
 
@@ -151,8 +165,9 @@ their actions audited, and evaluated by the benchmark.
   datasets record only in business data (each payment names its invoice number),
   and the first has not been defined. Nothing lists journal entries by status either, so an
   approving agent finds entries awaiting approval through the audit history
-  (`get_audit_history` with `action="submit_for_approval"`). Phase 11's agents will
-  want both.
+  (`get_audit_history` with `action="submit_for_approval"`). The example agents did
+  without them: the investigation agent works out open invoices and settlements
+  from the documents' business data, and no example agent approves.
 - The MCP server runs on stdio only, one actor per server process, so a workflow
   with several actors runs several servers. An HTTP transport would need
   per-request identity, which the SDK provides only as OAuth.
@@ -187,9 +202,12 @@ their actions audited, and evaluated by the benchmark.
 - `--transactions` counts the clean books' entries. Duplicates and unusual charges
   add entries and missing accruals and unreconciled payments leave them out, so
   the errored books hold a few more or fewer; the manifest gives the count.
-- How hard each error is to find has not been measured. Normal card expenses fall
-  on business days only, so an unusual charge's weekday alone gives it away, and
-  a duplicate bill repeats its original's description exactly.
+- The injected errors are easy to find once one knows what evidence to read: the
+  example agents find every one with a single rule per type (Phase 11, see
+  [docs/agents.md](docs/agents.md#how-they-score)). Normal card expenses also fall on
+  business days only, so an unusual charge's weekday alone gives it away (the
+  agents do not use it), and a duplicate bill repeats its original's description
+  exactly.
 - A change to the generator that changes its output fails the test pinning one
   dataset's fingerprint and ground truth; it must bump `GENERATOR_VERSION` and
   update the pinned values.
@@ -197,8 +215,11 @@ their actions audited, and evaluated by the benchmark.
   row by row through the kernel, so larger datasets take proportionally longer, and
   the acceptance suite now takes about a minute more.
 - The oracle is a calibration, not a baseline: for the tasks that find errors it
-  answers from the ground truth without calling a tool. There is no real agent to
-  compare it with until Phase 11, and how hard each task is has not been measured.
+  answers from the ground truth without calling a tool. The example agents are the
+  baselines, and they too score full marks on the standard dataset, so the benchmark
+  does not yet tell a good agent from a perfect one on these errors; what it can
+  measure is how far a model-driven agent falls short of a few rules. No
+  model-driven agent exists yet; one plugs in through the same `Agent` protocol.
 - Tasks are worded in English, and an agent may depend on the wording (the tests'
   scripted agents read ids and dates from it). Changing a task's wording, choices,
   expected answer, or scoring fails the test pinning the oracle's results on one
@@ -210,59 +231,90 @@ their actions audited, and evaluated by the benchmark.
 - Tasks run one after another, with no time limit: an agent that hangs hangs the
   run. Each task copies the books (about 1.2 MB for the standard dataset), and
   trajectories keep every tool result in full, so an agent that reads the whole
-  ledger leaves a large trajectory.
+  ledger leaves a large trajectory. The example agents read the whole ledger, or
+  every object, for most of the tasks that find errors: about 6 MB of trajectories
+  on the standard dataset, and GL-005's alone over 1 MB.
+- Trajectories keep each tool result as the agent saw it, including when records
+  were written (`created_at`, `updated_at`, `posted_at`). For the records a task
+  sets up during the run, such as the clerk's bill in JE-001 and JE-003, that is the
+  time of the run, so those fields differ from run to run; Phase 10's claim that
+  nothing in a trajectory does was wrong, since the oracle, the only agent it was
+  tested with, never reads those records. Results are unaffected and stay
+  byte-identical. The fields are kept rather than masked, so a trajectory is always
+  what the agent saw.
+- The example agents' known shortfalls: two deposits of the same amount on the
+  same day, neither naming its payer, one of them unrecorded, cannot be told apart
+  (AR-002 scored 0.8 once in sixteen datasets); a vendor with no posted bill gives
+  the journal entry agent nothing to learn from, and it declines to guess, which
+  happens in companies of about 300 transactions, where JE-001 and JE-003 can pick
+  such a vendor, a task no precedent can answer; the unusual-charge rule judges
+  card charges only, since one vendor's bills differ by twenty times in ordinary
+  books; and each agent chooses its workflow by task id and reads ids and dates
+  from the instructions, so a change of wording can break it.
+- The journal entry agent follows the way most of the vendor's ten latest posted
+  bills were recorded. Were most of those misposted, it would follow them, and say
+  so in its evidence.
+- Findings' reasons and evidence are recorded in `results.json` but not scored:
+  nothing yet measures whether an agent's explanation is right, only its answer.
 
-## Design decisions made in Phase 10:
+## Design decisions made in Phase 11:
 
-Recorded in [docs/benchmark.md](docs/benchmark.md) and
-[docs/architecture.md](docs/architecture.md#benchmark).
+Recorded in [docs/agents.md](docs/agents.md) and
+[docs/architecture.md](docs/architecture.md#example-agents).
 
-1. **Agents use the MCP tools, in-process.** The runner serves the real MCP server
-   for each task and gives the agent a synchronous `Tools` over it, so agents are
-   measured on the interface any MCP client has, with its schemas, permissions,
-   refusals, and audit, and need no transport or asynchronous code.
-2. **One workspace per task,** a copy of the books with the agent and a clerk
-   registered, so tasks are independent, the dataset is never touched, and the
-   agent's changes and audit log remain for inspection.
-3. **Expected answers from the data, never from a model.** From the books for
-   balances and open invoices; from the ground truth for errors; from what the task
-   set up for journal entries. Scores are F1 for sets of items, exact for amounts,
-   and line by line for entries, with the workflow scored apart.
-4. **The metrics come from records, not the agent's account of itself:** the
-   answer, the trajectory, and the workspace's audit log.
-5. **A task carries its reference solution.** The oracle runs it, which calibrates
-   the scoring and shows every task is solvable through the tools. It is the only
-   agent given the answer key.
-6. **Answers as Pydantic models,** which validate the answer and give its JSON
-   schema, for an LLM agent's tool definition. Fields a task does not ask for are
-   ignored; amounts are strings, as everywhere else.
-7. **Reproducible results:** no timestamps in results or trajectories, and task
-   choices drawn from a stream seeded by the dataset's seed and the task's id.
-8. **An agent is any object with `name` and `run`,** loaded by `--agent
-   module:attribute`, so Phase 11's agents, scripted or model-driven, plug in
-   without changes to the benchmark.
+1. **Rules, not a model.** The example agents apply explicit accounting rules, so
+   they are deterministic, testable in CI, and baselines a model-driven agent can be
+   measured against; a model-driven agent needs nothing new from the benchmark, since
+   it plugs in through the same `Agent` protocol.
+2. **The tools are the only way to the books.** The agents are a package above the
+   benchmark that may import only its `TaskPrompt`, `Tools`, and `ToolCall`, one
+   another, and six computing modules of the standard library. Allowing the whole
+   standard library would allow `sqlite3`, files, and sockets.
+3. **Learned from the books, not from the generator.** How to record a vendor's
+   bill comes from its posted bills; which account a category belongs to, from what
+   most of its documents agree on; which account the bank statement is for, from
+   the entries that record its lines. Nothing reads `opensumma.datasets`, where the
+   generator's own vendor accounts are.
+4. **Rules written from the documented evidence, then checked against ground
+   truth on other datasets.** Each rule reads the evidence
+   [docs/datasets.md](docs/datasets.md) lists for its error. The unusual-charge rule
+   was revised twice when checked against sixteen other datasets: the largest other
+   charge hid several unusual charges at one merchant, and vendor bills vary too
+   much to judge by amount.
+5. **Findings explained beside the answer.** Reads are not audited, so a read-only
+   agent's reasons and evidence go in an unscored `findings` field of its answer,
+   which results and trajectories keep.
+6. **Never guess, never overreach.** With no precedent, or a refused call it needs,
+   an agent stops and says why. The journal entry agent validates before it
+   submits, submits only a valid entry, and never approves or posts.
+7. **The benchmark names the example agents, but does not import them,** since they
+   are built on it: `--agent examples` resolves to `opensumma.agents:ExampleAgents`.
+8. **Trajectories stay faithful.** When the agents showed that trajectories hold the
+   times records were written during the run, the documentation was corrected rather
+   than the trajectories masked.
 
 ## Last Verification:
 
-2026-09-29, on Python 3.12.14 and 3.13.15:
+2026-09-30, on Python 3.12.14 and 3.13.15:
 
-- `pytest`: 769 passed (245 unit, 457 integration, 67 acceptance), including the
-  acceptance tests that run `erp benchmark run` as the installed command in an
-  empty directory, and a custom agent loaded from its own module
+- `pytest`: 807 passed (267 unit, 467 integration, 73 acceptance), including the
+  acceptance tests that run each example agent with `erp benchmark run` as the
+  installed command in an empty directory
 - `ruff check .`: passed
-- `ruff format --check .`: passed, the README's examples included
+- `ruff format --check .`: passed
 - `mypy` (strict): passed
-- The package built as a wheel containing `opensumma/benchmark/`, the dataset
-  generator, and all eight migrations; installed non-editably into a fresh Python
-  3.13 environment, the whole suite, Ruff, and mypy passed against it.
-- The oracle's results on the pinned dataset hash the same on Python 3.12 and 3.13.
-- Mutation checks, each caught by the suite and then undone: an empty answer
-  agreeing with any expected answer; calls left out of the trajectory; rejected
-  calls counted as refusals; the agent served the dataset's own books; agents
-  granted approval by default; every named record taken to exist; changes counted
-  as documented without evidence; results stamped with the time of the run; an
-  entry scored though it does not record the bill; answers refusing fields a task
-  does not ask for; a correction scored without its original voided; and the
-  benchmark importing the REST interface.
-- The README's Python examples were executed in order, the benchmark example
-  included, and every printed value matched.
+- The package built as a wheel containing `opensumma/agents/` and all eight
+  migrations; installed non-editably into a fresh Python 3.13 environment, the whole
+  suite, Ruff, and mypy passed against it.
+- `erp benchmark run --agent examples`, in an empty directory as the README shows,
+  generated the standard dataset and scored 1.0 on all sixteen tasks, every metric
+  at its best, in about 20 seconds.
+- The example agents were run through the benchmark on sixteen more datasets (300
+  to 2,000 transactions, seeds 1 to 2026, up to one error per fifteen transactions,
+  and the standard dataset without errors): no false alarm on clean books, and
+  every injected error found, but for the shortfalls under Known Issues.
+- Mutation checks, each caught by the suite and then undone: an agent importing
+  `sqlite3`; unusual charges judged against the largest other charge; receipts
+  matched to deposits the bank received before them; an entry submitted without
+  being validated; a proposal without evidence; the journal entry agent trying to
+  approve its own entry; and findings left out of the answer.

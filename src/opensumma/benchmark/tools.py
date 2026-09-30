@@ -6,8 +6,10 @@ refusals, and audit. The benchmark serves them in-process, and ``Tools`` present
 them synchronously, so an agent needs no asynchronous code and no transport.
 
 Every call is recorded, in order, as its trajectory: the tool, the arguments, and
-what came back. Nothing in a trajectory depends on when the run happened, so a
-deterministic agent leaves the same trajectory every time.
+what came back, exactly as the agent saw it. That includes when records were
+written (``created_at``, ``updated_at``, ``posted_at``), which for the records a
+task creates as it is set up, such as the clerk's bill, is the time of the run;
+apart from those, a deterministic agent leaves the same trajectory every time.
 """
 
 import json
