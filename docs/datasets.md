@@ -134,6 +134,30 @@ truth: at every month end, each account's balance in the errored books, less its
 balance in the clean books, is the sum of `actual` less `expected` over every error.
 The tests check this for every dataset they generate.
 
+### On PostgreSQL
+
+`erp dataset generate` writes SQLite files, since a dataset is a file to hand to an
+agent and the benchmark copies one per task. To serve a generated company from
+PostgreSQL instead, generate it into an empty database there with
+`generate_dataset`:
+
+```python
+from sqlalchemy.orm import Session
+
+from opensumma.datasets import generate_dataset
+from opensumma.db import create_engine, init_db
+
+url = "postgresql://ledger:secret@localhost:5432/acme"
+init_db(url)
+with Session(create_engine(url)) as session:
+    dataset = generate_dataset(session, company="acme", transactions=1000, seed=42)
+    session.commit()
+```
+
+The books are the same as on SQLite, ids included: the same fingerprint and the
+same ground truth, which `dataset` holds (`dataset.manifest`,
+`dataset.ground_truth`).
+
 ## Determinism
 
 - Every random draw comes from `random.Random.random()`, whose sequence Python

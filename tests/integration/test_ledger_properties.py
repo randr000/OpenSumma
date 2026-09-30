@@ -18,7 +18,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, timedelta
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 from hypothesis import given, settings
@@ -26,7 +25,6 @@ from hypothesis import strategies as st
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
-from opensumma.db import Base, create_engine
 from opensumma.kernel import (
     DEFAULT_CHART_OF_ACCOUNTS,
     AccountType,
@@ -146,16 +144,12 @@ def _net_by_account(session: Session) -> Counter[str]:
 
 
 @pytest.fixture(scope="module")
-def ledger(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Engine]:
-    path: Path = tmp_path_factory.mktemp("ledger") / "ledger.db"
-    engine = create_engine(f"sqlite:///{path}")
-    Base.metadata.create_all(engine)
-    with Session(engine) as session:
+def ledger(module_engine: Engine) -> Engine:
+    with Session(module_engine) as session:
         seed_chart_of_accounts(session)
         create_calendar_year_periods(session, 2026)
         session.commit()
-    yield engine
-    engine.dispose()
+    return module_engine
 
 
 @contextmanager

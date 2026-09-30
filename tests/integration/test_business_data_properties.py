@@ -6,7 +6,6 @@ to an accounting object, and reads it back from the database. Each example runs 
 a transaction that is rolled back, so examples never see one another's objects.
 """
 
-from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -16,7 +15,6 @@ from hypothesis import strategies as st
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
-from opensumma.db import Base, create_engine
 from opensumma.objects import AccountingObject, create_accounting_object
 from opensumma.objects.data import MAX_INTEGER, MIN_INTEGER
 
@@ -38,11 +36,8 @@ business_data = st.dictionaries(st.text(max_size=8), values, max_size=6)
 
 
 @pytest.fixture(scope="module")
-def database() -> Iterator[Engine]:
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
-    yield engine
-    engine.dispose()
+def database(module_engine: Engine) -> Engine:
+    return module_engine
 
 
 @settings(max_examples=100, deadline=None)

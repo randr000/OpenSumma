@@ -2,11 +2,12 @@
 
 ## Current Phase:
 
-Phase 11 — example accounting agents
+Phase 12 — PostgreSQL compatibility
 
 ## Current Status:
 
-Complete. All Phase 11 acceptance criteria are satisfied. Phase 12 has not started.
+Complete. All Phase 12 acceptance criteria are satisfied, and with them every phase of
+the specification's phase order.
 
 ## Completed:
 
@@ -66,37 +67,40 @@ truth; it writes the eight metrics of the specification, per-task results, and
 every tool call as a trajectory. An oracle runs each task's reference solution as a
 calibration. See [docs/benchmark.md](docs/benchmark.md).
 
-Phase 11 acceptance criteria:
+Phase 11 — example accounting agents. An investigation agent, a journal entry agent,
+and a duplicate-invoice agent (`opensumma.agents`), which apply explicit accounting
+rules through the MCP tools alone, audit every change with its reason and evidence,
+and together score 1.0 on all sixteen benchmark tasks of the standard dataset. See
+[docs/agents.md](docs/agents.md).
 
-- [x] Example investigation agent (`InvestigationAgent`, `--agent investigator`:
-  balances, the trial balance, and open invoices from the books, and eight kinds of
-  error found by one accounting rule each; it only reads)
-- [x] Example JE agent (`JournalEntryAgent`, `--agent journal-entry`: records a bill
-  as the vendor's latest posted bills were recorded, validates, and submits only a
-  valid entry; validates a colleague's entry; voids an invalid one, citing its
-  issue codes, and records its bill afresh)
-- [x] Example duplicate-invoice agent (`DuplicateInvoiceAgent`, `--agent
-  duplicate-invoice`: bills from one vendor with the same invoice number, compared
-  as letters and digits, and payments for a bill already paid in full)
-- [x] Agents interact through tools rather than SQL (the agents may import only
-  the benchmark's `TaskPrompt`, `Tools`, and `ToolCall`, one another, and six
-  computing modules of the standard library, which the layering test enforces;
-  in every workspace the readers leave the books' fingerprint unchanged, the SYSTEM
-  records nothing but the setup, and every audit event by the agent is one of its
-  tool calls, in order)
-- [x] Agent actions are auditable (every change is a workflow tool call by the
-  AGENT `agent` with a concise reason and evidence references, such as the precedent
-  entries a proposal follows, in a verified hash chain; every read and change is in
-  the trajectory; every finding is reported beside the answer with its reason and
-  evidence)
-- [x] Benchmark can evaluate agents (`erp benchmark run --agent examples`, or any of
-  the three, run by the acceptance test as the installed command in an empty
-  directory; on the standard dataset the three together score 1.0 on all sixteen
-  tasks, with every metric at its best, and each alone 1.0 on its own tasks; the
-  same agent gets byte-identical results)
+Phase 12 acceptance criteria (CLAUDE.md names the phase but lists no criteria; these
+were set for it):
 
-The agents use no language model: they are deterministic baselines, and examples of
-an agent built on the tools. See [docs/agents.md](docs/agents.md).
+- [x] PostgreSQL connection works (psycopg 3 through the `postgresql` extra; a URL
+  naming no driver, such as `postgresql://ledger:secret@db/books`, uses it)
+- [x] Migrations work on PostgreSQL (upgrade to head, downgrade to base, and upgrade
+  again, with the migrated schema exactly the models', `alembic check`; the data
+  migration of Phase 5 converts real rows there)
+- [x] The kernel, objects, workflow, audit log, REST, and MCP behave the same on
+  PostgreSQL (the whole suite runs there when `OPENSUMMA_TEST_POSTGRESQL_URL` names a
+  server: every test that takes a database from the fixtures gets one on it; all
+  823 pass there, and on SQLite all but the 12 that need PostgreSQL)
+- [x] Accounting invariants hold on PostgreSQL (exact money, UTC timestamps, JSON
+  business data refusing floats, immutable posted entries, closed periods refusing
+  postings, a balanced ledger and balance sheet, the property tests included)
+- [x] The same seed gives the same books on both backends (a dataset generated into
+  PostgreSQL has the SQLite dataset's fingerprint, ids, ground truth, and year-end
+  trial balance)
+- [x] Concurrent writers keep the books consistent (audit appends serialized;
+  workflow actions hold their subject; posting holds its period; each race run
+  deterministically on PostgreSQL, and many requests at once through the installed
+  REST server)
+- [x] The installed servers serve PostgreSQL (`python -m opensumma.api` and
+  `python -m opensumma.mcp` given a `postgresql://` URL)
+- [x] CI runs the suite on PostgreSQL (a job against a PostgreSQL 16 service)
+
+See [docs/architecture.md](docs/architecture.md#database) and
+[#concurrency](docs/architecture.md#concurrency).
 
 ## In Progress:
 
@@ -104,14 +108,19 @@ Nothing.
 
 ## Next:
 
-Phase 12 — PostgreSQL compatibility: the same schema, migrations, and suite on
-PostgreSQL, with audit sequence numbers serialized between concurrent transactions.
+The phase order is complete. Candidates, none begun: a model-driven agent measured
+against the example agents (through the same `Agent` protocol); year-end closing
+entries (open decision 2 in the accounting model); `search_transactions`,
+`get_open_ap`, and `get_open_ar`; paging for the ledger and object reads; and a
+license.
 
 ## Known Issues:
 
 - The repository now has a GitHub remote, and `main` was pushed through Phase 3. CI
   results have not been checked from this machine, which has no `gh` CLI. The same
-  commands pass locally on Python 3.12 and 3.13.
+  commands pass locally on Python 3.12 and 3.13. The PostgreSQL job (Phase 12) has
+  never run on GitHub: it was verified only by running its steps locally, against
+  a local PostgreSQL 16 in place of the service container.
 - There is no license file yet. The project is intended to be open source, but the license
   has not been chosen.
 - Accounts and periods have no delete operation, so a mistyped code can only be
@@ -185,9 +194,29 @@ PostgreSQL, with audit sequence numbers serialized between concurrent transactio
   made that way to a record other than an audit event leaves no event. Changes to the
   audit log itself are detected by `verify_audit_log`, except removing events from
   the very end; keeping the head hash it returns elsewhere covers that.
-- Audit events are numbered with a unique sequence. On PostgreSQL, two transactions
-  auditing at once would both claim the next number and one would fail; Phase 12
-  should serialize this.
+- Transactions that audit append to the log one after another (Phase 12): on
+  PostgreSQL each holds an advisory lock from its first audit event until it
+  commits, so write transactions serialize from that point. That bounds write
+  throughput, which suits a laboratory; a hash chain is serial by nature.
+- SQLite books are for one writer at a time. SQLite has no row locks, so the locks
+  that keep concurrent PostgreSQL transactions consistent are not sent to it, and
+  several processes writing one SQLite file at once are not protected: a race there
+  can fail on the unique audit sequence, or let a second approval of one entry
+  through. PostgreSQL is the backend for concurrent use.
+- On PostgreSQL, two transactions that lock rows in opposite orders can deadlock;
+  PostgreSQL then rolls one back and the caller gets the error, with no retry.
+  Workflow operations lock one subject each, so it takes an unusual mix of
+  operations in one transaction.
+- The PostgreSQL work was verified locally on PostgreSQL 16.2, from the binaries of
+  the `pgserver` Python package (no system PostgreSQL or running Docker here), and CI
+  uses the `postgres:16` image; other versions are untested. The test fixtures drop
+  databases `WITH (FORCE)`, which needs PostgreSQL 13 or later.
+- The suite takes about ten minutes on PostgreSQL, against six on SQLite: each test
+  creates a database from a template and drops it afterwards.
+- `erp dataset generate` and the benchmark work on SQLite files only, since a dataset
+  is a file handed to an agent and copied per task. A company is generated into
+  PostgreSQL with `generate_dataset` from Python
+  ([docs/datasets.md](docs/datasets.md#on-postgresql)).
 - Capturing every change costs time: the suite runs about a third slower, since
   seeding a chart of accounts now writes an event per row. Trusted batch code can
   record itself as one action with `audited` instead.
@@ -257,64 +286,61 @@ PostgreSQL, with audit sequence numbers serialized between concurrent transactio
 - Findings' reasons and evidence are recorded in `results.json` but not scored:
   nothing yet measures whether an agent's explanation is right, only its answer.
 
-## Design decisions made in Phase 11:
+## Design decisions made in Phase 12:
 
-Recorded in [docs/agents.md](docs/agents.md) and
-[docs/architecture.md](docs/architecture.md#example-agents).
+Recorded in [docs/architecture.md](docs/architecture.md#database) and
+[#concurrency](docs/architecture.md#concurrency).
 
-1. **Rules, not a model.** The example agents apply explicit accounting rules, so
-   they are deterministic, testable in CI, and baselines a model-driven agent can be
-   measured against; a model-driven agent needs nothing new from the benchmark, since
-   it plugs in through the same `Agent` protocol.
-2. **The tools are the only way to the books.** The agents are a package above the
-   benchmark that may import only its `TaskPrompt`, `Tools`, and `ToolCall`, one
-   another, and six computing modules of the standard library. Allowing the whole
-   standard library would allow `sqlite3`, files, and sockets.
-3. **Learned from the books, not from the generator.** How to record a vendor's
-   bill comes from its posted bills; which account a category belongs to, from what
-   most of its documents agree on; which account the bank statement is for, from
-   the entries that record its lines. Nothing reads `opensumma.datasets`, where the
-   generator's own vendor accounts are.
-4. **Rules written from the documented evidence, then checked against ground
-   truth on other datasets.** Each rule reads the evidence
-   [docs/datasets.md](docs/datasets.md) lists for its error. The unusual-charge rule
-   was revised twice when checked against sixteen other datasets: the largest other
-   charge hid several unusual charges at one merchant, and vendor bills vary too
-   much to judge by amount.
-5. **Findings explained beside the answer.** Reads are not audited, so a read-only
-   agent's reasons and evidence go in an unscored `findings` field of its answer,
-   which results and trajectories keep.
-6. **Never guess, never overreach.** With no precedent, or a refused call it needs,
-   an agent stops and says why. The journal entry agent validates before it
-   submits, submits only a valid entry, and never approves or posts.
-7. **The benchmark names the example agents, but does not import them,** since they
-   are built on it: `--agent examples` resolves to `opensumma.agents:ExampleAgents`.
-8. **Trajectories stay faithful.** When the agents showed that trajectories hold the
-   times records were written during the run, the documentation was corrected rather
-   than the trajectories masked.
+1. **Prove it with the suite that exists.** Rather than a separate PostgreSQL test
+   suite, the fixtures that hand tests a database create it on a PostgreSQL server
+   when one is named, so the same tests show the same behaviour on both backends.
+   PostgreSQL databases are copied from a template, as SQLite files are copied.
+2. **psycopg 3, optionally.** The driver is the `postgresql` extra, not a core
+   dependency, and a URL that names no driver uses it, since SQLAlchemy would
+   otherwise reach for psycopg2.
+3. **Concurrency is the difference that matters.** The schema and SQL were already
+   portable; what SQLite's one-writer-at-a-time had hidden was that rules checked in
+   Python can be broken by a transaction in between. Workflow operations lock the
+   subject they act on and re-read its state; posting holds its period against a
+   close; audit appends are serialized.
+4. **Portable locks where a row can stand for the thing.** `with_for_update`, which
+   SQLAlchemy renders for PostgreSQL and omits for SQLite, locks entries, objects,
+   and periods. Only the end of the audit log has no row, so it takes PostgreSQL's
+   advisory lock, the one piece of PostgreSQL-specific SQL, kept in `opensumma.db`
+   beside SQLite's foreign-key pragma. A head-of-log table was considered and
+   rejected: a new table, a migration, and a row every audited action updates, which
+   the audit capture would itself have to be kept from recording.
+5. **Races tested deterministically.** Each race is choreographed: the first
+   transaction acts and stays open while a second acts on the same record in
+   another thread. Without the locks the second succeeds on stale state; each lock
+   was removed in turn to see its test fail.
+6. **Datasets stay files.** The generator writes into any session, and a company
+   generated into PostgreSQL is the same books, but `erp dataset generate` and the
+   benchmark keep to SQLite files, which is what a dataset handed to an agent is.
 
 ## Last Verification:
 
-2026-09-30, on Python 3.12.14 and 3.13.15:
+2026-09-30, on Python 3.12.14 and 3.13.15, and PostgreSQL 16.2:
 
-- `pytest`: 807 passed (267 unit, 467 integration, 73 acceptance), including the
-  acceptance tests that run each example agent with `erp benchmark run` as the
-  installed command in an empty directory
+- `pytest` on SQLite: 811 passed and 12 skipped, the tests that need a PostgreSQL
+  server (823 in all: 271 unit, 472 integration, 80 acceptance)
+- `pytest` on PostgreSQL, with `OPENSUMMA_TEST_POSTGRESQL_URL` naming a server that
+  requires a password, one holding "@", a space, and "%": 823 passed
 - `ruff check .`: passed
 - `ruff format --check .`: passed
 - `mypy` (strict): passed
-- The package built as a wheel containing `opensumma/agents/` and all eight
-  migrations; installed non-editably into a fresh Python 3.13 environment, the whole
-  suite, Ruff, and mypy passed against it.
-- `erp benchmark run --agent examples`, in an empty directory as the README shows,
-  generated the standard dataset and scored 1.0 on all sixteen tasks, every metric
-  at its best, in about 20 seconds.
-- The example agents were run through the benchmark on sixteen more datasets (300
-  to 2,000 transactions, seeds 1 to 2026, up to one error per fifteen transactions,
-  and the standard dataset without errors): no false alarm on clean books, and
-  every injected error found, but for the shortfalls under Known Issues.
-- Mutation checks, each caught by the suite and then undone: an agent importing
-  `sqlite3`; unusual charges judged against the largest other charge; receipts
-  matched to deposits the bank received before them; an entry submitted without
-  being validated; a proposal without evidence; the journal entry agent trying to
-  approve its own entry; and findings left out of the answer.
+- The package built as a wheel; installed non-editably with the `postgresql` extra
+  into a fresh Python 3.13 environment, the whole suite, Ruff, and mypy passed
+  against it.
+- The first run of the unchanged suite on PostgreSQL, before any Phase 12 fix, had
+  805 of its 807 tests pass; both failures were tests' own raw SQL on JSON columns.
+- The README's Python examples were executed in order on SQLite, and every printed
+  value matched. Its PostgreSQL commands, and the recipe in docs/datasets.md, were
+  run against the local server: `alembic upgrade head` from
+  `OPENSUMMA_DATABASE_URL`, then a 1,000-transaction company generated into
+  PostgreSQL, whose fingerprint is that of the same seed on SQLite.
+- Mutation checks, each caught by the concurrency tests on PostgreSQL and then
+  undone: audit appends not serialized (the chain broke under concurrent writers);
+  the workflow not holding its subject (two approvals, and two postings, of one
+  entry both succeeded); and posting not holding its period (a reversal reached a
+  period closed while it was being posted).

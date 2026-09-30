@@ -3,7 +3,6 @@
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -60,10 +59,9 @@ def test_health_needs_no_key(api: TestClient) -> None:
     assert (response.status_code, response.json()) == (200, {"status": "ok"})
 
 
-def test_health_reports_a_schema_that_is_not_current(tmp_path: Path) -> None:
-    url = f"sqlite:///{tmp_path / 'old.db'}"
-    command.upgrade(alembic_config(url), "e933f730d688")  # before API keys
-    with TestClient(create_app(url)) as client:
+def test_health_reports_a_schema_that_is_not_current(database_url: str) -> None:
+    command.upgrade(alembic_config(database_url), "e933f730d688")  # before API keys
+    with TestClient(create_app(database_url)) as client:
         response = client.get("/health")
     assert (response.status_code, response.json()) == (
         503,

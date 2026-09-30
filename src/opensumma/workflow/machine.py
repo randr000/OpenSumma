@@ -9,8 +9,8 @@ the operations that take the action, and to the kernel and object layer beneath.
 from dataclasses import dataclass
 from enum import StrEnum
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import inspect, select
+from sqlalchemy.orm import InstanceState, Session
 
 from opensumma.kernel import AccountingPeriod, JournalEntry, JournalEntryStatus
 from opensumma.kernel import PeriodStatus as Period
@@ -86,6 +86,21 @@ ACCOUNTING_PERIOD_WORKFLOW: tuple[Transition, ...] = (
     Transition(Action.CLOSE, (Period.OPEN,), Period.CLOSED, Permission.ADMIN),
     Transition(Action.REOPEN, (Period.CLOSED,), Period.OPEN, Permission.ADMIN),
 )
+
+
+def hold(session: Session, subject: Subject) -> None:
+    """Lock ``subject`` until this transaction ends, and read its state afresh.
+
+    Every operation on an existing subject holds it before judging what it may do,
+    so of two transactions acting on one subject at once, the second waits for the
+    first to finish and then sees what it did: two approvals of one entry, or two
+    postings, cannot both succeed. On PostgreSQL this locks the subject's row;
+    SQLite has no row locks and is sent none, since its books are meant for one
+    writer at a time.
+    """
+    state: InstanceState[Subject] = inspect(subject)
+    if state.persistent:
+        session.refresh(subject, attribute_names=["status"], with_for_update=True)
 
 
 def authorize(

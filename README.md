@@ -43,6 +43,26 @@ from opensumma.db import init_db
 init_db("sqlite:///opensumma.db")
 ```
 
+### PostgreSQL
+
+SQLite suits one writer at a time; PostgreSQL is the backend for books that several
+people and agents write at once. The same code runs on both. Install the driver with
+the `postgresql` extra and point the URL at an existing database:
+
+```bash
+pip install -e ".[dev,postgresql]"
+export OPENSUMMA_DATABASE_URL=postgresql://ledger:secret@localhost:5432/books
+alembic upgrade head        # the schema; init_db(url) does the same from Python
+python -m opensumma.api     # the REST API, serving the PostgreSQL books
+```
+
+To run the test suite on PostgreSQL as well, name a server whose user may create
+databases; each test then gets a database of its own there:
+
+```bash
+OPENSUMMA_TEST_POSTGRESQL_URL=postgresql://postgres:secret@localhost:5432/postgres pytest
+```
+
 ## Using the kernel
 
 The accounting kernel is usable directly from Python, with no server running. It

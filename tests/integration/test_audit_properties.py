@@ -18,7 +18,6 @@ from hypothesis import strategies as st
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
-from opensumma.db import Base, create_engine
 from opensumma.workflow import (
     Actor,
     ActorType,
@@ -57,11 +56,8 @@ actions = st.fixed_dictionaries(
 
 
 @pytest.fixture(scope="module")
-def database() -> Iterator[Engine]:
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
-    yield engine
-    engine.dispose()
+def database(module_engine: Engine) -> Engine:
+    return module_engine
 
 
 @contextmanager
@@ -111,13 +107,11 @@ def test_any_altered_field_of_any_event_is_found(
 
         for sequence in [event.sequence for event in audit_history(session)]:
             for field, alteration in ALTERATIONS.items():
-                where = {"s": sequence}
-                original: object = connection.execute(
-                    text(f"SELECT {field} FROM audit_event WHERE sequence = :s"), where
-                ).scalar_one()
+                # Each alteration is undone by rolling back to a savepoint.
+                altering = connection.begin_nested()
                 connection.execute(
                     text(f"UPDATE audit_event SET {alteration} WHERE sequence = :s"),
-                    where,
+                    {"s": sequence},
                 )
                 session.expire_all()
                 report = verify_audit_log(session)
@@ -127,9 +121,6 @@ def test_any_altered_field_of_any_event_is_found(
                     field,
                 )
 
-                connection.execute(
-                    text(f"UPDATE audit_event SET {field} = :v WHERE sequence = :s"),
-                    {"v": original, **where},
-                )
+                altering.rollback()
                 session.expire_all()
                 assert verify_audit_log(session).is_intact

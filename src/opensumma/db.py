@@ -3,16 +3,29 @@
 All persistence goes through SQLAlchemy so the same code runs on SQLite (the
 default) and PostgreSQL. Alembic migrations are the single source of truth for
 the schema; they ship inside the package so an installed OpenSumma can create
-its own databases.
+its own databases. What each backend needs of its own, SQLite's foreign-key
+pragma and PostgreSQL's advisory lock, is here and nowhere else.
 """
 
+import hashlib
 import os
 from datetime import datetime
 from enum import Enum as PyEnum
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import CheckConstraint, Engine, Enum, MetaData, event
+from sqlalchemy import (
+    URL,
+    CheckConstraint,
+    Connection,
+    Engine,
+    Enum,
+    MetaData,
+    event,
+    func,
+    make_url,
+    select,
+)
 from sqlalchemy import create_engine as sa_create_engine
 from sqlalchemy.engine.interfaces import DBAPIConnection
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -78,16 +91,45 @@ def get_database_url() -> str:
     return os.environ.get(DATABASE_URL_ENV, DEFAULT_DATABASE_URL)
 
 
-def create_engine(url: str | None = None) -> Engine:
+def engine_url(url: str | URL) -> URL:
+    """``url`` as the URL an engine connects with.
+
+    A PostgreSQL URL that names no driver, such as ``postgresql://ledger@db/books``,
+    connects with psycopg (version 3), which the ``postgresql`` extra installs,
+    rather than SQLAlchemy's default of psycopg2. ``postgres://``, as some hosting
+    services write it, means the same.
+    """
+    parsed = make_url(url)
+    if parsed.drivername in ("postgresql", "postgres"):
+        return parsed.set(drivername="postgresql+psycopg")
+    return parsed
+
+
+def create_engine(url: str | URL | None = None) -> Engine:
     """Create an engine for the application.
 
     SQLite does not enforce foreign keys unless asked to on every connection;
     referential integrity is not optional for a ledger, so it is always enabled.
     """
-    engine = sa_create_engine(url or get_database_url())
+    engine = sa_create_engine(engine_url(url or get_database_url()))
     if engine.dialect.name == "sqlite":
         event.listen(engine, "connect", _enable_sqlite_foreign_keys)
     return engine
+
+
+def serialize(connection: Connection, name: str) -> None:
+    """Wait until no other transaction holds the lock ``name``, then hold it until
+    this transaction ends.
+
+    For what no row can stand for, such as the end of a table that transactions
+    append to one after another. On PostgreSQL it is a transaction-level advisory
+    lock, keyed by a hash of ``name``. SQLite has no such locks and is sent
+    nothing: its books are meant for one writer at a time.
+    """
+    if connection.dialect.name == "postgresql":
+        digest = hashlib.sha256(name.encode("utf-8")).digest()
+        key = int.from_bytes(digest[:8], "big", signed=True)
+        connection.execute(select(func.pg_advisory_xact_lock(key)))
 
 
 def _enable_sqlite_foreign_keys(

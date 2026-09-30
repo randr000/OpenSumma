@@ -114,7 +114,11 @@ Implemented in `opensumma.kernel.periods`.
   enforces it and `period_for_date()` fails loudly rather than arbitrarily if two
   periods ever match.
 - A period's end is not before its start, checked in Python and in the database.
-- Postings are accepted only into open periods (`assert_period_open()`).
+- Postings are accepted only into open periods (`assert_period_open()`). This holds
+  for transactions running at once too: posting holds the period it posts into
+  (`hold_period_for()`) and closing holds the period exclusively, so a posting and a
+  close of one period happen one after the other (see
+  [architecture.md](architecture.md#concurrency)).
 - Closing is reversible: a closed period can be reopened for corrections. The kernel's
   `close_period` and `reopen_period` do only that; the workflow engine decides who may
   close or reopen a period and in what order (see [Controls](#controls)).
@@ -553,6 +557,10 @@ Each operation checks, in this order, and changes nothing if any check fails:
 - **No stranded entries.** A period closes only when no entry dated in it could still
   be posted: drafts, proposals, and pending or approved entries are posted or voided
   first.
+- **One action at a time on a subject.** Each operation on an existing entry,
+  object, or period first holds it, locking its row and reading its status afresh,
+  so every control above judges the subject as it is: of two approvals of one entry
+  at once, on PostgreSQL, the second waits for the first and is then refused.
 
 ### Trusted layers and actors
 

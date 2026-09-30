@@ -25,7 +25,6 @@ from hypothesis import strategies as st
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
-from opensumma.db import Base, create_engine
 from opensumma.kernel import (
     JournalEntry,
     JournalEntryError,
@@ -65,11 +64,8 @@ STEPS = ["submit", "approve", "reject", "post", "reverse", "void"]
 
 
 @pytest.fixture(scope="module")
-def database() -> Iterator[Engine]:
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
-    yield engine
-    engine.dispose()
+def database(module_engine: Engine) -> Engine:
+    return module_engine
 
 
 @contextmanager

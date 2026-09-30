@@ -20,6 +20,10 @@ dependencies = [
 erp = "opensumma.cli:main"
 
 [project.optional-dependencies]
+# The PostgreSQL driver: psycopg 3, with its own copy of libpq.
+postgresql = [
+    "psycopg[binary]>=3.2",
+]
 dev = [
     "httpx2>=2.13",
     "hypothesis>=6.100",
@@ -48,6 +52,9 @@ files = ["src", "tests"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
+markers = [
+    "postgresql: needs a PostgreSQL server, named by OPENSUMMA_TEST_POSTGRESQL_URL",
+]
 # Warnings are errors: e.g. SQLAlchemy warns when Decimal values would be
 # silently converted to float, which must never pass unnoticed here.
 filterwarnings = ["error"]

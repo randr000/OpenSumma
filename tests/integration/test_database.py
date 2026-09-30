@@ -12,12 +12,12 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 
 
-def test_sqlite_connection_works(engine: Engine) -> None:
+def test_the_database_connection_works(engine: Engine) -> None:
     with engine.connect() as connection:
         assert connection.execute(text("SELECT 1")).scalar_one() == 1
 
 
-def test_sqlite_enforces_foreign_keys(engine: Engine) -> None:
+def test_foreign_keys_are_enforced(engine: Engine) -> None:
     metadata = MetaData()
     Table("parent", metadata, Column("id", Integer, primary_key=True))
     child = Table(

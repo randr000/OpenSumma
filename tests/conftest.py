@@ -1,6 +1,8 @@
+import itertools
+import os
 import shutil
 from collections.abc import Callable, Iterator
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -9,12 +11,14 @@ from anyio.from_thread import BlockingPortal, start_blocking_portal
 from fastapi.testclient import TestClient
 from mcp import Client
 from mcp.types import CallToolResult, Tool
-from sqlalchemy import Engine
+from sqlalchemy import Engine, make_url, text
+from sqlalchemy import create_engine as sa_create_engine
 from sqlalchemy.orm import Session
+from sqlalchemy.pool import NullPool
 
 import opensumma.workflow  # noqa: F401  (registers every model on Base.metadata)
 from opensumma.api import create_app
-from opensumma.db import Base, create_engine, init_db
+from opensumma.db import Base, create_engine, engine_url, init_db
 from opensumma.kernel import (
     create_calendar_year_periods,
     seed_chart_of_accounts,
@@ -30,11 +34,81 @@ from opensumma.workflow import (
     issue_api_key,
 )
 
+# --- The database the tests run on -------------------------------------------------
+#
+# The tests run on SQLite, unless OPENSUMMA_TEST_POSTGRESQL_URL names a PostgreSQL
+# server, such as postgresql://postgres@localhost:5432/postgres. Then every fixture
+# that gives a test a database creates it on that server instead, a fresh one for
+# each test, so the same tests show the same behaviour on both backends. The URL's
+# user must be allowed to create databases. Tests of what only one backend has are
+# marked ``postgresql`` or keep to SQLite files of their own.
+
+POSTGRESQL_URL_ENV = "OPENSUMMA_TEST_POSTGRESQL_URL"
+
+
+class PostgreSQLServer:
+    """Creates, copies, and drops the test databases on a PostgreSQL server."""
+
+    def __init__(self, url: str) -> None:
+        self.url = engine_url(url)
+        self._admin = sa_create_engine(
+            self.url, isolation_level="AUTOCOMMIT", poolclass=NullPool
+        )
+        self._names = itertools.count(1)
+
+    def create(self, template: str | None = None) -> str:
+        """The URL of a new database: empty, or a copy of the database at
+        ``template``, which nothing may be connected to."""
+        name = f"opensumma_test_{os.getpid()}_{next(self._names)}"
+        copy = "" if template is None else f' TEMPLATE "{make_url(template).database}"'
+        with self._admin.connect() as connection:
+            connection.execute(text(f'CREATE DATABASE "{name}"{copy}'))
+        return self.url.set(database=name).render_as_string(hide_password=False)
+
+    def drop(self, url: str) -> None:
+        name = make_url(url).database
+        with self._admin.connect() as connection:
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+
+    def close(self) -> None:
+        self._admin.dispose()
+
+
+@pytest.fixture(scope="session")
+def postgresql() -> Iterator[PostgreSQLServer | None]:
+    """The PostgreSQL server the tests create their databases on, if any."""
+    url = os.environ.get(POSTGRESQL_URL_ENV)
+    if not url:
+        yield None
+        return
+    server = PostgreSQLServer(url)
+    yield server
+    server.close()
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    if os.environ.get(POSTGRESQL_URL_ENV):
+        return
+    skip = pytest.mark.skip(
+        reason=f"needs a PostgreSQL server: set {POSTGRESQL_URL_ENV}"
+    )
+    for item in items:
+        if "postgresql" in item.keywords:
+            item.add_marker(skip)
+
 
 @pytest.fixture
-def database_url(tmp_path: Path) -> str:
-    """URL of a fresh, empty SQLite database file unique to the test."""
-    return f"sqlite:///{tmp_path / 'opensumma.db'}"
+def database_url(tmp_path: Path, postgresql: PostgreSQLServer | None) -> Iterator[str]:
+    """URL of a fresh, empty database unique to the test: a SQLite file, or a
+    database on the PostgreSQL server."""
+    if postgresql is None:
+        yield f"sqlite:///{tmp_path / 'opensumma.db'}"
+        return
+    url = postgresql.create()
+    yield url
+    postgresql.drop(url)
 
 
 @pytest.fixture
@@ -44,21 +118,68 @@ def engine(database_url: str) -> Iterator[Engine]:
     engine.dispose()
 
 
-@pytest.fixture
-def session() -> Iterator[Session]:
-    """A session on an empty in-memory database with the current schema.
-
-    The schema comes from the models rather than from Alembic, and lives in memory
-    rather than in a file, because both are far faster per test: every DDL
-    statement on a file waits for the disk. ``test_models_match_migrations`` proves
-    models and migrations agree, and acceptance tests go through ``init_db`` on a
-    real file instead.
-    """
-    engine = create_engine("sqlite://")
+@pytest.fixture(scope="session")
+def schema_template(postgresql: PostgreSQLServer | None) -> Iterator[str | None]:
+    """On PostgreSQL, a database with the current schema, for copying."""
+    if postgresql is None:
+        yield None
+        return
+    url = postgresql.create()
+    engine = create_engine(url)
     Base.metadata.create_all(engine)
-    with Session(engine) as session:
-        yield session
     engine.dispose()
+    yield url
+    postgresql.drop(url)
+
+
+@contextmanager
+def _empty_books(
+    postgresql: PostgreSQLServer | None, template: str | None
+) -> Iterator[Engine]:
+    """An engine on a new database with the current schema and nothing in it."""
+    if postgresql is None or template is None:
+        engine = create_engine("sqlite://")
+        Base.metadata.create_all(engine)
+        yield engine
+        engine.dispose()
+        return
+    url = postgresql.create(template)
+    engine = create_engine(url)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        postgresql.drop(url)
+
+
+@pytest.fixture
+def session(
+    postgresql: PostgreSQLServer | None, schema_template: str | None
+) -> Iterator[Session]:
+    """A session on an empty database with the current schema.
+
+    The schema comes from the models rather than from Alembic, because that is far
+    faster per test, and on SQLite it lives in memory rather than in a file, since
+    every DDL statement on a file waits for the disk; on PostgreSQL each test gets
+    a copy of one database created from the models. ``test_models_match_migrations``
+    proves models and migrations agree, and acceptance tests go through ``init_db``
+    instead.
+    """
+    with (
+        _empty_books(postgresql, schema_template) as engine,
+        Session(engine) as session,
+    ):
+        yield session
+
+
+@pytest.fixture(scope="module")
+def module_engine(
+    postgresql: PostgreSQLServer | None, schema_template: str | None
+) -> Iterator[Engine]:
+    """An engine on an empty database with the current schema, shared by one
+    module's tests, which keep it empty by rolling back what they do."""
+    with _empty_books(postgresql, schema_template) as engine:
+        yield engine
 
 
 @pytest.fixture
@@ -127,7 +248,8 @@ def admin(books: Session) -> Actor:
 # --- The REST interface ------------------------------------------------------------
 #
 # A migrated database with open books, counterparties, and one API key per actor is
-# built once and copied for every test, because migrating a file takes a while.
+# built once and copied for every test, because migrating a database takes a while:
+# a SQLite file copied as a file, or a PostgreSQL database copied as a template.
 
 API_CAST: dict[str, tuple[ActorType, tuple[Permission, ...]]] = {
     "reader": (ActorType.AGENT, (Permission.READ_ONLY,)),
@@ -142,10 +264,13 @@ API_CAST: dict[str, tuple[ActorType, tuple[Permission, ...]]] = {
 
 @pytest.fixture(scope="session")
 def api_template(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> tuple[Path, dict[str, str]]:
-    path = tmp_path_factory.mktemp("api") / "template.db"
-    url = f"sqlite:///{path}"
+    tmp_path_factory: pytest.TempPathFactory, postgresql: PostgreSQLServer | None
+) -> Iterator[tuple[str, dict[str, str]]]:
+    """The URL of the template books, and each actor's API key."""
+    if postgresql is None:
+        url = f"sqlite:///{tmp_path_factory.mktemp('api') / 'template.db'}"
+    else:
+        url = postgresql.create()
     init_db(url)
     engine = create_engine(url)
     with Session(engine) as session:
@@ -165,17 +290,39 @@ def api_template(
             keys[code] = issue_api_key(session, actor)
         session.commit()
     engine.dispose()
-    return path, keys
+    yield url, keys
+    if postgresql is not None:
+        postgresql.drop(url)
+
+
+@contextmanager
+def _copy_of(
+    template: str, postgresql: PostgreSQLServer | None, directory: Path
+) -> Iterator[str]:
+    """The URL of a fresh copy of the books at ``template``."""
+    if postgresql is None:
+        path = directory / "books.db"
+        shutil.copyfile(str(make_url(template).database), path)
+        yield f"sqlite:///{path}"
+        return
+    url = postgresql.create(template)
+    try:
+        yield url
+    finally:
+        postgresql.drop(url)
 
 
 @pytest.fixture
 def api(
-    api_template: tuple[Path, dict[str, str]], tmp_path: Path
+    api_template: tuple[str, dict[str, str]],
+    postgresql: PostgreSQLServer | None,
+    tmp_path: Path,
 ) -> Iterator[TestClient]:
     """A client for the REST interface over a fresh copy of the template books."""
-    path = tmp_path / "books.db"
-    shutil.copyfile(api_template[0], path)
-    with TestClient(create_app(f"sqlite:///{path}")) as client:
+    with (
+        _copy_of(api_template[0], postgresql, tmp_path) as url,
+        TestClient(create_app(url)) as client,
+    ):
         yield client
 
 
@@ -183,11 +330,12 @@ def api(
 def api_url(api: TestClient) -> str:
     """The database URL behind ``api``, for checking what it wrote."""
     engine = api.app.state.engine  # type: ignore[attr-defined]
-    return str(engine.url)
+    url: str = engine.url.render_as_string(hide_password=False)
+    return url
 
 
 @pytest.fixture
-def auth(api_template: tuple[Path, dict[str, str]]) -> Callable[[str], dict[str, str]]:
+def auth(api_template: tuple[str, dict[str, str]]) -> Callable[[str], dict[str, str]]:
     """The request headers that identify an actor of ``API_CAST`` by code."""
     keys = api_template[1]
     return lambda code: {"Authorization": f"Bearer {keys[code]}"}
@@ -262,10 +410,14 @@ class McpServers:
 
 @pytest.fixture
 def mcp_as(
-    api_template: tuple[Path, dict[str, str]], tmp_path: Path
+    api_template: tuple[str, dict[str, str]],
+    postgresql: PostgreSQLServer | None,
+    tmp_path: Path,
 ) -> Iterator[McpServers]:
     """MCP servers over a fresh copy of the template books: ``mcp_as("agent")``."""
-    path = tmp_path / "books.db"
-    shutil.copyfile(api_template[0], path)
-    with start_blocking_portal() as portal, ExitStack() as stack:
-        yield McpServers(f"sqlite:///{path}", api_template[1], portal, stack)
+    with (
+        _copy_of(api_template[0], postgresql, tmp_path) as url,
+        start_blocking_portal() as portal,
+        ExitStack() as stack,
+    ):
+        yield McpServers(url, api_template[1], portal, stack)

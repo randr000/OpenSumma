@@ -158,7 +158,8 @@ def test_business_data_is_stored_as_json_without_floats(session: Session) -> Non
     session.commit()
 
     raw: str = session.execute(
-        text("SELECT data FROM accounting_object WHERE id = :id"), {"id": obj.id}
+        text("SELECT CAST(data AS TEXT) FROM accounting_object WHERE id = :id"),
+        {"id": obj.id},
     ).scalar_one()
     assert '"amount": "1200.00"' in raw
 

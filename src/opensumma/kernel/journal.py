@@ -46,7 +46,7 @@ from opensumma.kernel.models import (
     JournalLine,
     JournalLineDimension,
 )
-from opensumma.kernel.periods import period_for_date
+from opensumma.kernel.periods import hold_period_for, period_for_date
 from opensumma.money import ZERO, ensure_money
 from opensumma.utc import ensure_date, utcnow
 
@@ -175,6 +175,7 @@ def post_journal_entry(session: Session, entry: JournalEntry) -> None:
         raise EntryStatusError(
             f"{_label(entry)} is VOIDED and can never be posted", entry.status
         )
+    hold_period_for(session, entry.entry_date)
     issues = validate_journal_entry(session, entry)
     if issues:
         raise JournalEntryError(issues)
@@ -240,6 +241,7 @@ def reverse_journal_entry(
     )
     # Validated before it is linked to the original or added to the session, so a
     # rejected reversal leaves no trace behind.
+    hold_period_for(session, entry_date)
     if issues := validate_journal_entry(session, reversal):
         raise JournalEntryError(issues)
 

@@ -1,8 +1,9 @@
 # Roadmap
 
 Phases are implemented in order. The full acceptance criteria for each phase are in
-[CLAUDE.md](../CLAUDE.md), under "Phase N Acceptance Criteria". Current status is tracked
-in [progress.md](../progress.md).
+[CLAUDE.md](../CLAUDE.md), under "Phase N Acceptance Criteria", except Phase 12's, which
+CLAUDE.md does not list; they were set when it was implemented and are recorded in
+[progress.md](../progress.md), where current status is tracked.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -18,7 +19,7 @@ in [progress.md](../progress.md).
 | 9 | Deterministic dataset generator (`erp dataset generate`) | Complete |
 | 10 | Benchmark / evaluation framework (`erp benchmark run`) | Complete |
 | 11 | Example accounting agents (`opensumma.agents`) | Complete |
-| 12 | PostgreSQL compatibility | Not started |
+| 12 | PostgreSQL compatibility | Complete |
 
 A phase is complete only when its implementation, unit, integration, and acceptance tests
 pass, Ruff passes, the documentation and `progress.md` are updated, and the work is

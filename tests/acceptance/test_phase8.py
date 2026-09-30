@@ -40,8 +40,8 @@ PROPOSAL: dict[str, Any] = {
 }
 
 
-def test_the_mcp_server_starts(tmp_path: Path) -> None:
-    url = f"sqlite:///{tmp_path / 'books.db'}"
+def test_the_mcp_server_starts(database_url: str) -> None:
+    url = database_url
     init_db(url)
     engine = create_engine(url)
     with Session(engine) as session:

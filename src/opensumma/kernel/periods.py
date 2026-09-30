@@ -109,6 +109,24 @@ def period_for_date(session: Session, on: date) -> AccountingPeriod:
     return period
 
 
+def hold_period_for(session: Session, on: date) -> None:
+    """Keep the period that owns ``on`` from being closed or reopened until this
+    transaction ends, and read its status afresh.
+
+    Posting takes a shared lock on its period and closing an exclusive one, so a
+    posting and a close of the same period happen one after the other, and an
+    entry cannot reach a period closed while it was being posted. Postings into
+    one period do not wait for one another. SQLite has no row locks and is sent
+    none: its books are meant for one writer at a time.
+    """
+    session.execute(
+        select(AccountingPeriod)
+        .where(AccountingPeriod.start_date <= on, AccountingPeriod.end_date >= on)
+        .with_for_update(read=True)
+        .execution_options(populate_existing=True)
+    ).all()
+
+
 def periods(session: Session) -> list[AccountingPeriod]:
     """Every accounting period, in chronological order."""
     return list(

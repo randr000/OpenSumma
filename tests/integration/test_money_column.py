@@ -38,10 +38,15 @@ def test_amounts_round_trip_exactly(amounts_engine: Engine) -> None:
         stored: list[Decimal | None] = list(
             connection.scalars(select(amounts.c.amount).order_by(amounts.c.id))
         )
-        raw_types = connection.scalars(
-            text("SELECT DISTINCT typeof(amount) FROM amounts")
-        )
-        assert set(raw_types) == {"integer", "null"}  # never a float in the database
+        # Never a float in the database. SQLite stores whatever it is given, so each
+        # value's own type is asked; PostgreSQL's is the column's.
+        if connection.dialect.name == "sqlite":
+            query = "SELECT DISTINCT typeof(amount) FROM amounts"
+            expected = {"integer", "null"}
+        else:
+            query = "SELECT DISTINCT pg_typeof(amount)::text FROM amounts"
+            expected = {"bigint"}
+        assert set(connection.scalars(text(query))) == expected
 
     assert stored == values
     assert all(v.as_tuple().exponent == -2 for v in stored if v is not None)

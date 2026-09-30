@@ -23,3 +23,30 @@ jobs:
       - run: ruff format --check .
       - run: mypy
       - run: pytest
+
+  # The same suite on PostgreSQL: every test that takes a database from the
+  # suite's fixtures gets one on this server, and the tests marked postgresql,
+  # skipped above, run too.
+  postgresql:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: opensumma
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      OPENSUMMA_TEST_POSTGRESQL_URL: postgresql://postgres:opensumma@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ".[dev,postgresql]"
+      - run: pytest

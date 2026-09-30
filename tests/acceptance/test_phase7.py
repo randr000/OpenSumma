@@ -16,7 +16,6 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -58,8 +57,8 @@ def _get(url: str, key: str | None = None) -> tuple[int, Any]:
         return error.code, json.load(error)
 
 
-def test_the_fastapi_application_starts(tmp_path: Path) -> None:
-    url = f"sqlite:///{tmp_path / 'books.db'}"
+def test_the_fastapi_application_starts(database_url: str) -> None:
+    url = database_url
     init_db(url)
     engine = create_engine(url)
     with Session(engine) as session:

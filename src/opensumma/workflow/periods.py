@@ -28,6 +28,7 @@ from opensumma.workflow.errors import PendingEntriesError, PeriodSequenceError
 from opensumma.workflow.machine import (
     ACCOUNTING_PERIOD_WORKFLOW,
     authorize,
+    hold,
     reason_text,
     record_transition,
 )
@@ -50,6 +51,7 @@ def close_period(
     may still be awaiting posting.
     """
     with _audited(session, "close_period", period, actor, reason, evidence) as audit:
+        hold(session, period)
         transition = authorize(
             ACCOUNTING_PERIOD_WORKFLOW, WorkflowAction.CLOSE, period.status, actor
         )
@@ -104,6 +106,7 @@ def reopen_period(
     Every later period must be open, so only the latest closed period reopens.
     """
     with _audited(session, "reopen_period", period, actor, reason, evidence) as audit:
+        hold(session, period)
         transition = authorize(
             ACCOUNTING_PERIOD_WORKFLOW, WorkflowAction.REOPEN, period.status, actor
         )

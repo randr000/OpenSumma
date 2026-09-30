@@ -7,7 +7,7 @@ from sqlalchemy import Engine
 from opensumma.db import alembic_config, init_db
 
 
-def test_fresh_sqlite_database_is_initialized_at_latest_schema(
+def test_a_fresh_database_is_initialized_at_the_latest_schema(
     database_url: str, engine: Engine
 ) -> None:
     init_db(database_url)

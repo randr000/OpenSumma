@@ -34,7 +34,7 @@ from sqlalchemy.orm import (
     relationship,
 )
 
-from opensumma.db import Base, TimestampMixin, enum_check, enum_column
+from opensumma.db import Base, TimestampMixin, enum_check, enum_column, serialize
 from opensumma.kernel.models import (
     DESCRIPTION_LENGTH,
     NAME_LENGTH,
@@ -52,6 +52,8 @@ STATUS_LENGTH = 32
 ACTION_LENGTH = 64
 OBJECT_TYPE_LENGTH = 64
 HASH_LENGTH = 64  # a SHA-256 digest in hexadecimal
+# The lock a transaction holds while it appends to the audit log.
+AUDIT_LOG_LOCK = "opensumma.audit_log"
 
 
 class Actor(TimestampMixin, Base):
@@ -319,11 +321,17 @@ def _guard_workflow_history(
 def _chain_audit_events(
     session: Session, flush_context: UOWTransaction, instances: object
 ) -> None:
-    """Number and hash each new audit event after the last one recorded."""
+    """Number and hash each new audit event after the last one recorded.
+
+    Transactions append to the log one after another: each waits for any other
+    that is appending to finish before it reads the last event, so two cannot
+    both number theirs after the same one.
+    """
     new = [record for record in session.new if isinstance(record, AuditEvent)]
     if not new:
         return
     new.sort(key=lambda record: _creation_order.get(record, -1))
+    serialize(session.connection(), AUDIT_LOG_LOCK)
     last = session.execute(
         select(AuditEvent.sequence, AuditEvent.hash)
         .order_by(AuditEvent.sequence.desc())

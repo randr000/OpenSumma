@@ -29,6 +29,7 @@ from opensumma.workflow.machine import (
     ACCOUNTING_OBJECT_WORKFLOW,
     Transition,
     authorize,
+    hold,
     reason_text,
     record_transition,
 )
@@ -99,6 +100,7 @@ def extract_accounting_object(
     with _audited(
         session, "extract_accounting_object", obj, actor, reason, evidence, data=data
     ) as audit:
+        hold(session, obj)
         transition = authorize(
             ACCOUNTING_OBJECT_WORKFLOW, WorkflowAction.EXTRACT, obj.status, actor
         )
@@ -132,6 +134,7 @@ def classify_accounting_object(
         evidence,
         counterparty=counterparty,
     ) as audit:
+        hold(session, obj)
         transition = authorize(
             ACCOUNTING_OBJECT_WORKFLOW, WorkflowAction.CLASSIFY, obj.status, actor
         )
@@ -166,6 +169,7 @@ def void_accounting_object(
     with _audited(
         session, "void_accounting_object", obj, actor, reason, evidence
     ) as audit:
+        hold(session, obj)
         transition = authorize(
             ACCOUNTING_OBJECT_WORKFLOW, WorkflowAction.VOID, obj.status, actor
         )

@@ -47,6 +47,7 @@ from opensumma.workflow.machine import (
     JOURNAL_ENTRY_WORKFLOW,
     Transition,
     authorize,
+    hold,
     reason_text,
     record_transition,
 )
@@ -150,6 +151,7 @@ def submit_for_approval(
     with _audited(
         session, "submit_for_approval", entry, actor, reason, evidence
     ) as audit:
+        hold(session, entry)
         transition = authorize(
             JOURNAL_ENTRY_WORKFLOW, WorkflowAction.SUBMIT, entry.status, actor
         )
@@ -175,6 +177,7 @@ def approve_journal_entry(
     with _audited(
         session, "approve_journal_entry", entry, actor, reason, evidence
     ) as audit:
+        hold(session, entry)
         transition = authorize(
             JOURNAL_ENTRY_WORKFLOW, WorkflowAction.APPROVE, entry.status, actor
         )
@@ -201,6 +204,7 @@ def reject_journal_entry(
     with _audited(
         session, "reject_journal_entry", entry, actor, reason, evidence
     ) as audit:
+        hold(session, entry)
         transition = authorize(
             JOURNAL_ENTRY_WORKFLOW, WorkflowAction.REJECT, entry.status, actor
         )
@@ -221,6 +225,7 @@ def post_journal_entry(
     with _audited(
         session, "post_journal_entry", entry, actor, reason, evidence
     ) as audit:
+        hold(session, entry)
         transition = authorize(
             JOURNAL_ENTRY_WORKFLOW, WorkflowAction.POST, entry.status, actor
         )
@@ -257,6 +262,7 @@ def reverse_journal_entry(
         entry_date=entry_date,
         description=description,
     ) as audit:
+        hold(session, entry)
         transition = authorize(
             JOURNAL_ENTRY_WORKFLOW, WorkflowAction.REVERSE, entry.status, actor
         )
@@ -289,6 +295,7 @@ def void_journal_entry(
     with _audited(
         session, "void_journal_entry", entry, actor, reason, evidence
     ) as audit:
+        hold(session, entry)
         transition = authorize(
             JOURNAL_ENTRY_WORKFLOW, WorkflowAction.VOID, entry.status, actor
         )

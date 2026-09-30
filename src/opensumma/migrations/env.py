@@ -5,12 +5,12 @@ from typing import Any, Literal
 
 from alembic import context
 from alembic.autogenerate.api import AutogenContext
-from sqlalchemy import create_engine
+from sqlalchemy import URL, create_engine
 from sqlalchemy.pool import NullPool
 
 # Registers every model on Base.metadata; the workflow imports the layers below it.
 import opensumma.workflow  # noqa: F401
-from opensumma.db import Base, get_database_url
+from opensumma.db import Base, engine_url, get_database_url
 from opensumma.money import Money
 from opensumma.objects.data import BusinessData
 from opensumma.utc import UtcDateTime
@@ -23,8 +23,8 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def _database_url() -> str:
-    return config.get_main_option("sqlalchemy.url") or get_database_url()
+def _database_url() -> URL:
+    return engine_url(config.get_main_option("sqlalchemy.url") or get_database_url())
 
 
 def _render_item(

@@ -1,7 +1,4 @@
 import io
-import sqlite3
-from collections.abc import Iterator
-from contextlib import closing, contextmanager
 from pathlib import Path
 
 import pytest
@@ -9,7 +6,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import Engine
+from sqlalchemy import Engine, inspect, text
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -18,7 +15,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 def cli_config(database_url: str) -> Config:
     """The ``alembic`` command-line configuration, pointed at the test database."""
     config = Config(REPO_ROOT / "alembic.ini")
-    config.set_main_option("sqlalchemy.url", database_url)
+    # Options are interpolated, so a "%" in the URL, as in an encoded password,
+    # is written "%%", as opensumma.db.alembic_config writes it.
+    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
     return config
 
 
@@ -84,37 +83,20 @@ PHASE_4 = "de5016324ad2"
 PHASE_5 = "71801d14980d"
 
 
-@contextmanager
-def _sqlite(database_url: str) -> Iterator[sqlite3.Connection]:
-    """A raw connection to the test database, committed and always closed.
-
-    ``sqlite3.Connection`` as a context manager commits but does not close, which
-    Python 3.13 reports as an unclosed-database ResourceWarning.
-    """
-    path = database_url.removeprefix("sqlite:///")
-    with closing(sqlite3.connect(path)) as db, db:
-        yield db
-
-
-def _check_constraints(database_url: str, table: str) -> set[str]:
-    with _sqlite(database_url) as connection:
-        (sql,) = connection.execute(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
-        ).fetchone()
+def _check_constraints(engine: Engine, table: str) -> set[str]:
     return {
-        part.split(" CHECK")[0].strip()
-        for part in sql.split("CONSTRAINT")
-        if " CHECK" in part
+        str(constraint["name"])
+        for constraint in inspect(engine).get_check_constraints(table)
     }
 
 
 def test_rebuilding_a_table_keeps_its_check_constraints(
-    cli_config: Config, database_url: str
+    cli_config: Config, engine: Engine
 ) -> None:
     """Batch migrations rebuild SQLite tables; ``alembic check`` cannot see a lost
     CHECK, so this looks at the rebuilt table directly."""
     command.upgrade(cli_config, "head")
-    assert _check_constraints(database_url, "accounting_object") == {
+    assert _check_constraints(engine, "accounting_object") == {
         "ck_accounting_object_object_type_is_valid",
         "ck_accounting_object_source_not_empty",
         "ck_accounting_object_status_is_valid",
@@ -122,7 +104,7 @@ def test_rebuilding_a_table_keeps_its_check_constraints(
 
 
 def test_entity_ids_become_counterparties_and_come_back(
-    cli_config: Config, database_url: str
+    cli_config: Config, engine: Engine
 ) -> None:
     command.upgrade(cli_config, PHASE_4)
     rows = [
@@ -133,24 +115,30 @@ def test_entity_ids_become_counterparties_and_come_back(
         ("bank_transaction", "BANKCO"),
         ("expense", None),
     ]
-    stamp = "2026-03-01 09:00:00.000000"
-    with _sqlite(database_url) as connection:
-        connection.executemany(
-            "INSERT INTO accounting_object (object_type, status, occurred_at, source,"
-            " entity_id, data, created_at, updated_at)"
-            " VALUES (?, 'OBSERVED', ?, 'seed', ?, '{}', ?, ?)",
-            [(kind, stamp, entity, stamp, stamp) for kind, entity in rows],
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO accounting_object (object_type, status, occurred_at,"
+                " source, entity_id, data, created_at, updated_at) VALUES (:kind,"
+                " 'OBSERVED', :stamp, 'seed', :entity, '{}', :stamp, :stamp)"
+            ),
+            [
+                {"kind": kind, "entity": entity, "stamp": "2026-03-01 09:00:00+00:00"}
+                for kind, entity in rows
+            ],
         )
 
     command.upgrade(cli_config, PHASE_5)
-    with _sqlite(database_url) as connection:
+    with engine.connect() as connection:
         created = connection.execute(
-            "SELECT code, name, kind FROM counterparty ORDER BY code"
-        ).fetchall()
+            text("SELECT code, name, kind FROM counterparty ORDER BY code")
+        ).all()
         named = connection.execute(
-            "SELECT o.object_type, c.code FROM accounting_object o"
-            " LEFT JOIN counterparty c ON c.id = o.counterparty_id ORDER BY o.id"
-        ).fetchall()
+            text(
+                "SELECT o.object_type, c.code FROM accounting_object o"
+                " LEFT JOIN counterparty c ON c.id = o.counterparty_id ORDER BY o.id"
+            )
+        ).all()
     assert created == [
         ("BANKCO", "BANKCO", "VENDOR"),  # named by no customer-type object
         ("C-OLD", "C-OLD", "CUSTOMER"),
@@ -166,11 +154,11 @@ def test_entity_ids_become_counterparties_and_come_back(
     ]
 
     command.downgrade(cli_config, PHASE_4)
-    with _sqlite(database_url) as connection:
+    with engine.connect() as connection:
         restored = connection.execute(
-            "SELECT object_type, entity_id FROM accounting_object ORDER BY id"
-        ).fetchall()
+            text("SELECT object_type, entity_id FROM accounting_object ORDER BY id")
+        ).all()
     assert restored == rows
     assert "ck_accounting_object_entity_id_not_empty" in _check_constraints(
-        database_url, "accounting_object"
+        engine, "accounting_object"
     )
