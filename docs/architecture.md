@@ -45,10 +45,13 @@ Dependency rules:
   `interface` ← `api` and `mcp`. The Accounting Object layer sits above the kernel;
   the workflow engine above both; the REST and MCP interfaces above everything, side
   by side, sharing `interface`, which presents records and commits actions for both.
+  The dataset generator, `datasets`, is trusted code above the workflow and beside
+  the interfaces, driven by the `erp` command line (`cli.py`).
   `tests/unit/test_layering.py` fails if a layer imports one above it, if any domain
-  layer imports FastAPI, Starlette, uvicorn, Pydantic, or MCP, if `interface` imports
-  either interface or its framework, or if either interface imports the other or
-  its framework. That is what guarantees no report can read an Accounting Object and
+  layer or the generator imports FastAPI, Starlette, uvicorn, Pydantic, or MCP, if
+  `interface` imports either interface or its framework, if either interface
+  imports the other or its framework, or if anything but the command line imports
+  the generator. That is what guarantees no report can read an Accounting Object and
   the domain never depends on an interface.
 - The diagram draws the kernel and the workflow engine side by side because they are
   peers in purpose: one decides what is valid, the other who may act and when. In
@@ -76,7 +79,7 @@ Persistence details (table names, keys, SQL) do not leak into the agent interfac
 
 ## Package layout
 
-Current state (Phase 8):
+Current state (Phase 9):
 
 ```text
 src/opensumma/
@@ -139,6 +142,18 @@ src/opensumma/
         read_tools.py       the read-only tools
         mutating_tools.py   the mutating tools, one per workflow operation
         __main__.py         python -m opensumma.mcp, on stdio
+    datasets/           the deterministic dataset generator, trusted code above the
+                        workflow
+        rng.py              random draws that are the same on every platform
+        model.py            a plan: transactions, documents, statement lines
+        cast.py             the vendors, customers, products, and card merchants
+        business.py         planning a year of business, exactly N transactions
+        errors.py           injecting known errors, and their ground truth
+        recorder.py         recording a plan through the kernel and object layer
+        books.py            the books' canonical content, and its fingerprint
+        generator.py        plan_dataset, generate_dataset, write_dataset
+    cli.py              the erp command line: erp dataset generate
+    __main__.py         python -m opensumma, the same command line
     migrations/         Alembic environment and revisions, shipped inside the package
 tests/
     unit/           pure logic, no database
@@ -305,6 +320,31 @@ same identity, permissions, audit, and JSON.
   initialization: amounts as strings, the entry lifecycle, and concise reasons and
   evidence. There is no HTTP transport: it would need per-request identity, which
   the SDK provides only as OAuth.
+
+## Datasets
+
+Implemented in `opensumma.datasets` (Phase 9), and described fully in
+[datasets.md](datasets.md). `erp dataset generate --company acme --transactions
+10000 --seed 42` writes a company's books (`books.db`), a manifest, and the ground
+truth of the errors injected into them.
+
+- **Plan, then record.** The generator first plans the year as plain values, with no
+  database: a fixed monthly schedule and a variable business that together make
+  exactly the transactions asked for. Errors are then injected into the plan, which
+  records each one's entries as they are and as they should be. Only then is the
+  plan recorded, so bad parameters are refused before any file is written, and the
+  plan can be tested quickly on its own.
+- **Deterministic.** Every draw comes from `random.random()`, in a stream per purpose
+  seeded by the seed and the purpose's name, so the same parameters give the same
+  books on every platform and Python version, and the business beneath the errors
+  is the same with or without them. The manifest's fingerprint hashes the books'
+  content, leaving out when rows were written.
+- **Trusted, beneath the workflow.** The recorder calls the kernel and the object
+  layer directly, since the workflow would refuse the errors it must create. Every
+  entry is still validated and posted by the kernel, and every flush passes the
+  ledger's guards. The whole run is one audited `generate_dataset` action. Autoflush
+  is suspended and the session flushed every 500 records, which halves the time the
+  hooks would otherwise take.
 
 ## Database
 

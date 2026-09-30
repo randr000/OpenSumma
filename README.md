@@ -28,6 +28,7 @@ ruff check .             # lint
 ruff format .            # format
 mypy                     # type-check
 alembic upgrade head     # create/upgrade the database schema
+erp dataset generate --company acme --transactions 1000 --seed 42  # a dataset
 ```
 
 The database URL is read from `OPENSUMMA_DATABASE_URL` and defaults to
@@ -427,7 +428,9 @@ async def main() -> None:
         entry_id = entry.structured_content["id"]
         await client.call_tool("submit_for_approval", {"entry_id": entry_id})
 
-        refused = await client.call_tool("approve_journal_entry", {"entry_id": entry_id})
+        refused = await client.call_tool(
+            "approve_journal_entry", {"entry_id": entry_id}
+        )
         print(refused.is_error, refused.structured_content["permission"])
         # True APPROVER
 
@@ -439,9 +442,44 @@ Every read needs READ_ONLY and every change is audited, as on the REST API. A
 refusal is an error result carrying the same JSON the audit log records for it, and
 an argument a tool does not declare is refused rather than ignored.
 
+## Datasets
+
+Agents are evaluated on generated companies: a year of books with known errors in
+them, and the ground truth of every error. The same seed always gives the same
+dataset.
+
+```bash
+erp dataset generate --company acme --transactions 10000 --seed 42
+# Generated acme: 10,000 transactions in 2026, 10,013 journal entries in the books, 100 injected errors.
+#   books:        datasets/acme/books.db
+#   manifest:     datasets/acme/manifest.json
+#   ground truth: datasets/acme/ground_truth.json
+#   fingerprint:  sha256:...
+```
+
+`books.db` is the company's books, which the REST and MCP interfaces serve as they
+are; give an agent a copy of it and nothing else. `ground_truth.json` lists each
+error: its type (a duplicate invoice, a wrong account, a missing accrual, and eight
+more), the entries as recorded and as they should be, and how far each account is
+off. The same from Python:
+
+```python
+from opensumma.datasets import write_dataset
+
+dataset = write_dataset("datasets/demo", company="demo", transactions=1000, seed=42)
+print(dataset.manifest["year_end"]["is_balanced"])  # True
+first = dataset.ground_truth["errors"][0]
+print(first["type"], first["journal_entry_ids"])  # missing_vendor [263]
+print(first["details"]["vendor"])  # V-STRATUS
+```
+
+[docs/datasets.md](docs/datasets.md) describes the business, the error types, and
+the ground truth format.
+
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md): layers, boundaries, and infrastructure decisions
 - [docs/accounting-model.md](docs/accounting-model.md): accounting invariants and domain model
 - [docs/agent-model.md](docs/agent-model.md): how AI agents interact with the kernel
+- [docs/datasets.md](docs/datasets.md): generated datasets, their errors, and their ground truth
 - [docs/roadmap.md](docs/roadmap.md): phases and acceptance criteria

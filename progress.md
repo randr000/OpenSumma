@@ -2,11 +2,11 @@
 
 ## Current Phase:
 
-Phase 8 — MCP interface
+Phase 9 — deterministic dataset generator
 
 ## Current Status:
 
-Complete. All Phase 8 acceptance criteria are satisfied. Phase 9 has not started.
+Complete. All Phase 9 acceptance criteria are satisfied. Phase 10 has not started.
 
 ## Completed:
 
@@ -48,27 +48,38 @@ Phase 7 — FastAPI REST interface. Every workflow operation and read over HTTP,
 identified by an actor's API key, with READ_ONLY gating every read, refusals
 committed so their audit events survive, and amounts as JSON strings.
 
-Phase 8 acceptance criteria:
+Phase 8 — MCP interface. The semantic tools over MCP on stdio: 15 read-only and 14
+mutating tools, kept in separate modules and annotated as such, acting as the actor
+whose API key starts the server, with the REST interface's permissions, audit, and
+JSON, which both interfaces now share in `opensumma.interface`.
 
-- [x] MCP server starts (`python -m opensumma.mcp`, on stdio, as the actor whose key
-  is in `OPENSUMMA_API_KEY`; the acceptance test launches it as a subprocess and
-  speaks MCP to it with the SDK's client, and checks it will not start without a
-  key)
-- [x] Read tools work (15 read-only tools: the chart, accounts, balances, periods,
-  dimensions, counterparties, journal entries, the ledger, all four reports,
-  accounting objects, and the audit history, each requiring READ_ONLY)
-- [x] Proposal tools work (`propose_journal_entry`, amounts as strings, refused with
-  issue codes when the kernel cannot record it; and `observe_accounting_object`,
-  `extract_accounting_object`, and `classify_accounting_object`)
-- [x] Validation tool works (`validate_journal_entry`)
-- [x] Permission checks work (every mutating tool is the workflow operation of its
-  name, with its permission, controls, and audit; an agent that tries to approve
-  or post is refused, and the attempt is in the audit log)
-- [x] MCP integration tests pass
+Phase 9 acceptance criteria:
 
-The MCP and REST interfaces now share `opensumma.interface`: the response models,
-the views, and the unit of work, moved out of `opensumma.api` so that neither
-interface depends on the other.
+- [x] Deterministic dataset generation works (`erp dataset generate --company acme
+  --transactions 1000 --seed 42`, run by the acceptance test as the installed
+  command, writes `books.db`, `manifest.json`, and `ground_truth.json`)
+- [x] Seed produces reproducible data (the same parameters give the same books,
+  fingerprint, and byte-identical manifest and ground truth; another seed gives
+  another dataset; a test pins one dataset's fingerprint and ground truth, on
+  Python 3.12 and 3.13, and another shows the plan does not depend on hash
+  randomization)
+- [x] 1,000 transaction dataset works (about 5 seconds; the REST interface serves
+  it as it is)
+- [x] 10,000 transaction dataset works (about 35 seconds, 65 customers, over 5,000
+  bank statement lines, 100 errors)
+- [x] Generated companies balance (trial balance and balance sheet at every month
+  end; cash and inventory never negative; receivables and payables equal their open
+  items)
+- [x] Error injection works (all eleven types in the specification, spread in turn,
+  no type taking more than a quarter of its candidates)
+- [x] Ground truth is preserved (every error's entries match the books, and the
+  errored books differ from the clean books of the same seed by exactly the ground
+  truth at every month end; a correction built from it validates in the workflow)
+
+The generator plans a year as plain values first, a fixed schedule of 237
+transactions and a variable business filling the rest exactly, injects errors into
+the plan, and records it through the kernel and the object layer as one audited
+action. See [docs/datasets.md](docs/datasets.md).
 
 ## In Progress:
 
@@ -76,9 +87,9 @@ Nothing.
 
 ## Next:
 
-Phase 9 — the deterministic dataset generator (`erp dataset generate`): companies
-with a chart, counterparties, and a year of realistic transactions from a seed, the
-same seed giving the same books, with errors injected and their ground truth kept.
+Phase 10 — the benchmark (`erp benchmark run`): a task schema and at least ten
+deterministic tasks over generated datasets (GL-001 to JE-003), scored exactly
+against their ground truth, with agent trajectories recorded and results exported.
 
 ## Known Issues:
 
@@ -128,13 +139,15 @@ same seed giving the same books, with errors injected and their ground truth kep
   is reported by the SDK as text naming each field, not as structured JSON.
 - `/ledger` and `/accounting-objects`, and the `get_ledger` and
   `search_accounting_objects` tools, return everything matching their filters, with
-  no paging; the audit history pages. A large dataset (Phase 9) will want paging on
-  the others.
+  no paging; the audit history pages. A 10,000-transaction dataset has over 22,000
+  ledger lines and 15,000 objects, so an unfiltered read is large; the benchmark
+  (Phase 10) will want paging.
 - API keys do not expire; revoking them, or deactivating the actor, cuts access. The
   server has no TLS or rate limiting: it is meant for a local laboratory.
 - `search_transactions`, `get_open_ap`, and `get_open_ar` have no endpoint or tool
-  yet; the last two wait on settlement between payments and bills, and the first
-  has not been defined. Nothing lists journal entries by status either, so an
+  yet; the last two wait on settlement between payments and bills, which generated
+  datasets record only in business data (each payment names its invoice number),
+  and the first has not been defined. Nothing lists journal entries by status either, so an
   approving agent finds entries awaiting approval through the audit history
   (`get_audit_history` with `action="submit_for_approval"`). Phase 11's agents will
   want both.
@@ -163,51 +176,86 @@ same seed giving the same books, with errors injected and their ground truth kep
   record itself as one action with `audited` instead.
 - Data filters in `search_accounting_objects` match top-level fields as text, so a
   filter of `"3"` also matches a stored integer `3`, on SQLite and PostgreSQL alike.
+- Datasets cover one calendar year, with every period open and nothing closed into
+  retained earnings. The bank statement covers the operating account only; the
+  payroll account, funded exactly and emptied each payday, has none.
+- Generated records have no workflow history: the generator records beneath the
+  workflow, as trusted code, and sets its documents' statuses (`CLASSIFIED`, or
+  `EXTRACTED` for unmatched statement lines and bills without a vendor) directly.
+- `--transactions` counts the clean books' entries. Duplicates and unusual charges
+  add entries and missing accruals and unreconciled payments leave them out, so
+  the errored books hold a few more or fewer; the manifest gives the count.
+- How hard each error is to find has not been measured. Normal card expenses fall
+  on business days only, so an unusual charge's weekday alone gives it away, and
+  a duplicate bill repeats its original's description exactly.
+- A change to the generator that changes its output fails the test pinning one
+  dataset's fingerprint and ground truth; it must bump `GENERATOR_VERSION` and
+  update the pinned values.
+- Generation was measured up to 10,000 transactions (about 35 seconds). It records
+  row by row through the kernel, so larger datasets take proportionally longer, and
+  the acceptance suite now takes about a minute more.
 
-## Design decisions made in Phase 8:
+## Design decisions made in Phase 9:
 
-Recorded in [docs/architecture.md](docs/architecture.md#mcp-interface) and
-[docs/agent-model.md](docs/agent-model.md#tools).
+Recorded in [docs/datasets.md](docs/datasets.md) and
+[docs/architecture.md](docs/architecture.md#datasets).
 
-1. **A shared package, not a dependency between interfaces.** The response models,
-   views, and unit of work moved from `opensumma.api` to `opensumma.interface`, so
-   the MCP server never imports FastAPI and an entry or refusal looks the same on
-   either interface. The layering test keeps the two interfaces peers.
-2. **One actor per server, its key from the environment,** checked on every call,
-   so revocation takes effect at once. The key stays out of the process list.
-3. **Every tool is listed to every actor.** Permissions refuse, and the refusal is
-   audited, rather than hiding tools: an agent's attempt to approve its own work is
-   exactly what a benchmark needs to see. Read-only and mutating tools are kept
-   apart in their own modules and by the `readOnlyHint` annotation.
-4. **Refusals are error results carrying the audit log's JSON,** so an agent reads
-   the error, issue codes, and missing permission as structured data.
-5. **Unknown arguments are refused,** as the REST interface refuses unknown fields;
-   the SDK would otherwise ignore them silently.
-6. **One JSON document per result,** with lists in named fields, because the SDK
-   sends a bare list as one text block per item and an empty one as nothing.
-7. **The tools mirror the REST interface,** plus a `data` filter on
-   `search_accounting_objects` for finding duplicate documents, and a required
-   `reason` in the schema of the four tools whose operation requires one.
-   `search_transactions` is left until the benchmark says what it must find.
+1. **Plan, then record.** A year is planned as plain values with no database, and
+   errors injected into the plan, before anything is written. Bad parameters are
+   refused before a file exists, and the business can be tested in milliseconds.
+2. **Exactly N transactions,** each one journal entry in the clean books: a fixed
+   schedule of 237, the same for every company, and a variable business sized to
+   fill the rest.
+3. **Errors from their own random stream,** so a seed's clean and errored books
+   share the same business, and the ground truth is exactly their difference: the
+   entries as recorded and as they should be, which the tests check at every month
+   end.
+4. **Only `random.random()`,** in a stream per purpose, since Python guarantees its
+   sequence but not the algorithms of `randint`, `choice`, or `shuffle`. Datasets
+   are reproducible in content, shown by a fingerprint of the books that leaves out
+   when rows were written, rather than byte for byte.
+5. **Costs sized to gross profit.** Sales are planned first and payroll, rent, and
+   the opening balances follow from what they earn, so every size and customer mix
+   gives a plausible margin, and cash and inventory never go negative.
+6. **Trusted, beneath the workflow, as one audited action.** The workflow would
+   refuse the errors the generator must create, so it records through the kernel,
+   whose validation and guards still apply to every entry. Autoflush is suspended
+   and flushes batched, which halves the time.
+7. **The bank statement as objects.** Every operating-account movement has a
+   `bank_transaction` line; bank charges, payroll transfers, and tax payments are
+   recorded from theirs, and the rest wait, unmatched, for reconciliation.
+8. **Three files, and the agent gets one.** The books, a manifest, and the ground
+   truth. The audit log records the generation without the seed or the error count,
+   since agents can read it.
+9. **An `erp` console script** built on `argparse`, like the other entry points,
+   with `python -m opensumma` beside it; Phase 10 adds `erp benchmark run`.
 
 ## Last Verification:
 
 2026-09-29, on Python 3.12.14 and 3.13.15:
 
-- `pytest`: 629 passed (169 unit, 408 integration, 52 acceptance), including the
-  acceptance test that launches `python -m opensumma.mcp` and speaks MCP to it over
-  stdio
+- `pytest`: 713 passed (220 unit, 432 integration, 61 acceptance), including the
+  acceptance tests that run the installed `erp` command and generate a
+  10,000-transaction dataset
 - `ruff check .`: passed
-- `ruff format --check .`: passed
+- `ruff format --check .`: passed. It formats the README's Python examples too, and
+  one line of the MCP example added in Phase 8 was too long, so the Phase 8 commit
+  did not pass this check; it is fixed here.
 - `mypy` (strict): passed
-- The package built as a wheel containing `opensumma/mcp/`, `opensumma/interface/`,
-  and all eight migrations, and requiring `mcp>=2.2`; installed non-editably into a
+- The package built as a wheel containing `opensumma/datasets/`, `opensumma/cli.py`,
+  the `erp` console script, and all eight migrations; installed non-editably into a
   fresh Python 3.13 environment, the whole suite, Ruff, and mypy passed against it.
-- Mutation checks, each caught by the suite and then undone: refusals rolled back
-  and their audit events lost; reads without READ_ONLY; the key authenticated once
-  instead of on every call; unknown arguments ignored; refusals answered as plain
-  text; every tool annotated read-only; a proposal bypassing the workflow; the MCP
-  interface importing the REST interface; the shared views importing the MCP SDK;
-  and the server starting without a key.
-- The README's Python examples were executed in order, the MCP example included,
-  and every printed value matched.
+  An unanchored `datasets/` in `.gitignore`, meant for generated output, had left
+  the generator's own package out of the wheel; it is anchored to the root now.
+- The golden dataset test gives the same fingerprint and ground truth on Python
+  3.12 and 3.13, and the planner gives the same plan under different
+  `PYTHONHASHSEED` values.
+- Mutation checks, each caught by the suite and then undone: draws taken from
+  `randint`; a plan iterating a set; a plan one transaction short; ground truth
+  misstating the correct entry; a missing accrual whose reversal stays in the
+  books; unusual charges on weekdays; entries recorded but not posted; bank
+  statement lines not recorded; the seed written to the audit log; a fingerprint
+  including posting times; an existing dataset overwritten; and the generator
+  importing the REST interface.
+- The README's Python examples were executed in order, the dataset example
+  included, and every printed value matched.

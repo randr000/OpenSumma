@@ -18,3 +18,8 @@ dist/
 *.db
 *.sqlite
 *.sqlite3
+
+# Generated datasets (erp dataset generate writes them to datasets/ by default).
+# Anchored to the root: src/opensumma/datasets/ is the generator's own package,
+# and the wheel build leaves out whatever this file ignores.
+/datasets/

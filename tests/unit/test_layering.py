@@ -6,7 +6,8 @@ no report can read an object. Likewise the kernel and the object layer never
 depend on the workflow engine, which wraps them, and no domain layer depends on the
 interfaces or on the frameworks they are built with. The REST and MCP interfaces
 are peers: neither imports the other or the other's framework, and what they share
-depends on neither.
+depends on neither. The dataset generator is trusted code beside the workflow: it
+uses the domain layers, none of them uses it, and it needs no interface.
 """
 
 import ast
@@ -26,13 +27,21 @@ FRAMEWORKS = ("fastapi", "starlette", "uvicorn", "pydantic", "mcp")
 
 # Each layer, and what it must never import: the layers above it, and the
 # frameworks the interfaces are built with.
+DATASETS = ("opensumma.datasets", "opensumma.cli")
 LAYERS = {
-    "kernel": ("opensumma.objects", "opensumma.workflow", *INTERFACES, *FRAMEWORKS),
-    "objects": ("opensumma.workflow", *INTERFACES, *FRAMEWORKS),
-    "workflow": (*INTERFACES, *FRAMEWORKS),
-    "interface": (*REST, *MCP),
-    "api": MCP,
-    "mcp": REST,
+    "kernel": (
+        "opensumma.objects",
+        "opensumma.workflow",
+        *DATASETS,
+        *INTERFACES,
+        *FRAMEWORKS,
+    ),
+    "objects": ("opensumma.workflow", *DATASETS, *INTERFACES, *FRAMEWORKS),
+    "workflow": (*DATASETS, *INTERFACES, *FRAMEWORKS),
+    "datasets": ("opensumma.cli", *INTERFACES, *FRAMEWORKS),
+    "interface": (*DATASETS, *REST, *MCP),
+    "api": (*DATASETS, *MCP),
+    "mcp": (*DATASETS, *REST),
 }
 
 

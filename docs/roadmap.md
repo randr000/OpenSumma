@@ -15,7 +15,7 @@ in [progress.md](../progress.md).
 | 6 | Audit / event log | Complete |
 | 7 | FastAPI REST interface | Complete |
 | 8 | MCP interface | Complete |
-| 9 | Deterministic dataset generator (`erp dataset generate`) | Not started |
+| 9 | Deterministic dataset generator (`erp dataset generate`) | Complete |
 | 10 | Benchmark / evaluation framework (`erp benchmark run`) | Not started |
 | 11 | Example accounting agents | Not started |
 | 12 | PostgreSQL compatibility | Not started |

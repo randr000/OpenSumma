@@ -16,6 +16,9 @@ dependencies = [
     "uvicorn>=0.30",
 ]
 
+[project.scripts]
+erp = "opensumma.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "httpx2>=2.13",
