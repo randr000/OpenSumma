@@ -111,8 +111,7 @@ def export_books(session: Session) -> dict[str, Any]:
                     {
                         "line_number": line.line_number,
                         "account": line.account.code,
-                        "debit": str(line.debit),
-                        "credit": str(line.credit),
+                        "amount": str(line.amount),
                         "memo": line.memo,
                         "dimensions": {
                             tag.value.dimension.code: tag.value.code

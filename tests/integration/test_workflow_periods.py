@@ -87,8 +87,8 @@ def test_a_period_does_not_close_over_entries_still_awaiting_posting(
     books: Session, admin: Actor, clerk: Actor
 ) -> None:
     lines = [
-        LineInput("6200", debit=Decimal("100.00")),
-        LineInput("1111", credit=Decimal("100.00")),
+        LineInput("6200", Decimal("100.00")),
+        LineInput("1111", Decimal("-100.00")),
     ]
     draft = create_journal_entry(
         books, entry_date=date(2026, 1, 20), description="Draft", lines=lines

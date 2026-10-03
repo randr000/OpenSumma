@@ -69,6 +69,11 @@ The accounting kernel is usable directly from Python, with no server running. It
 covers the chart of accounts, accounting periods, dimensions, journal entries, the
 ledger they post to, and the financial reports derived from it.
 
+A journal line carries one signed amount: a debit is positive and a credit negative,
+so an entry balances when its lines sum to zero, and a line may be zero. Balances are
+signed the same way; only the financial statements state each amount in its
+section's normal direction.
+
 ```python
 from datetime import date
 from decimal import Decimal
@@ -107,8 +112,8 @@ with Session(create_engine(url)) as session:
         entry_date=date(2026, 3, 1),
         description="Owner investment",
         lines=[
-            LineInput("1111", debit=Decimal("10000.00")),
-            LineInput("3100", credit=Decimal("10000.00")),
+            LineInput("1111", Decimal("10000.00")),  # a debit
+            LineInput("3100", Decimal("-10000.00")),  # a credit
         ],
     )
     aws = create_journal_entry(
@@ -116,10 +121,8 @@ with Session(create_engine(url)) as session:
         entry_date=date(2026, 3, 15),
         description="AWS invoice for March, unpaid",
         lines=[
-            LineInput(
-                "6100", debit=Decimal("120.50"), dimensions={"DEPARTMENT": "ENG"}
-            ),
-            LineInput("2110", credit=Decimal("120.50")),
+            LineInput("6100", Decimal("120.50"), dimensions={"DEPARTMENT": "ENG"}),
+            LineInput("2110", Decimal("-120.50")),
         ],
     )
     print(validate_journal_entry(session, aws))  # []
@@ -133,8 +136,8 @@ with Session(create_engine(url)) as session:
         entry_date=date(2026, 3, 15),
         description="Misposted",
         lines=[
-            LineInput("6000", debit=Decimal("10.00")),  # a parent account
-            LineInput("1111", credit=Decimal("9.99")),  # does not balance
+            LineInput("6000", Decimal("10.00")),  # a parent account
+            LineInput("1111", Decimal("-9.99")),  # does not balance
         ],
     )
     try:
@@ -146,7 +149,13 @@ with Session(create_engine(url)) as session:
     # Reports derive from the posted ledger only; the draft above is not in it.
     march_end = date(2026, 3, 31)
     trial = trial_balance(session, as_of=march_end)
-    print(trial.total_debits, trial.total_credits)  # 10120.50 10120.50
+    for line in trial.lines:  # debit balances positive, credit balances negative
+        print(line.account_code, line.balance)
+    # 1111 10000.00
+    # 2110 -120.50
+    # 3100 -10000.00
+    # 6100 120.50
+    print(trial.total, trial.is_balanced)  # 0.00 True
     march = income_statement(session, start=date(2026, 3, 1), end=march_end)
     print(march.net_income)  # -120.50
     sheet = balance_sheet(session, as_of=march_end)
@@ -208,8 +217,8 @@ with Session(create_engine(url)) as session:
         entry_date=date(2026, 3, 20),
         description="Stratus INV-2002",
         lines=[
-            LineInput("5200", debit=Decimal("80.00")),
-            LineInput("2110", credit=Decimal("80.00")),
+            LineInput("5200", Decimal("80.00")),
+            LineInput("2110", Decimal("-80.00")),
         ],
     )
     post_journal_entry(session, entry)
@@ -298,8 +307,8 @@ with Session(create_engine(url)) as session:
         entry_date=date(2026, 3, 25),
         description="Paper Trail INV-5",
         lines=[
-            LineInput("6700", debit=Decimal("45.00")),
-            LineInput("2110", credit=Decimal("45.00")),
+            LineInput("6700", Decimal("45.00")),
+            LineInput("2110", Decimal("-45.00")),
         ],
         accounting_object=bill,
     )
@@ -378,8 +387,8 @@ curl -s -H "Authorization: Bearer $KEY" http://127.0.0.1:8000/accounts/6100
 curl -s -X POST http://127.0.0.1:8000/journal-entries \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"entry_date": "2026-03-28", "description": "Brightline, March",
-       "lines": [{"account": "6100", "debit": "49.00"},
-                 {"account": "2110", "credit": "49.00"}]}'
+       "lines": [{"account": "6100", "amount": "49.00"},
+                 {"account": "2110", "amount": "-49.00"}]}'
 # {"id":8,"entry_date":"2026-03-28","description":"Brightline, March","status":"PROPOSED",...}
 
 curl -s -X POST -H "Authorization: Bearer $KEY" \
@@ -387,9 +396,10 @@ curl -s -X POST -H "Authorization: Bearer $KEY" \
 # {"error":"InvalidTransitionError","message":"cannot approve from PROPOSED; ...}
 ```
 
-Amounts are strings, never JSON numbers. Every read needs READ_ONLY; every change is
-a workflow operation, with its permission checks and its audit event. A refusal is
-answered with the same JSON the audit log records for it.
+Amounts are strings, never JSON numbers, and signed: a debit positive, a credit
+negative. Every read needs READ_ONLY; every change is a workflow operation, with its
+permission checks and its audit event. A refusal is answered with the same JSON the
+audit log records for it.
 
 ## The MCP server
 
@@ -440,8 +450,8 @@ async def main() -> None:
                 "entry_date": "2026-03-29",
                 "description": "Paper Trail INV-6",
                 "lines": [
-                    {"account": "6700", "debit": "30.00"},
-                    {"account": "2110", "credit": "30.00"},
+                    {"account": "6700", "amount": "30.00"},
+                    {"account": "2110", "amount": "-30.00"},
                 ],
                 "reason": "Same vendor and account as INV-5",
                 "evidence": ["invoice=INV-6"],

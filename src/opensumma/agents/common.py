@@ -115,11 +115,15 @@ class Posted:
 
     @property
     def total(self) -> Decimal:
-        return sum((Decimal(line["debit"]) for line in self.lines), Decimal("0.00"))
+        """The entry's debits added up: its positive amounts."""
+        amounts = (Decimal(line["amount"]) for line in self.lines)
+        return sum((amount for amount in amounts if amount > 0), Decimal("0.00"))
 
     @property
     def debited_accounts(self) -> set[str]:
-        return {line["account_code"] for line in self.lines if Decimal(line["debit"])}
+        return {
+            line["account_code"] for line in self.lines if Decimal(line["amount"]) > 0
+        }
 
 
 class Books:

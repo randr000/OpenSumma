@@ -64,15 +64,10 @@ class Reader:
             day = re.search(DAY, task.instructions).group(1)
             report = tools.call("get_trial_balance", as_of=day).result
             lines = [
-                {"account": row["account_code"], "debit": row["debit"],
-                 "credit": row["credit"]}
+                {"account": row["account_code"], "balance": row["balance"]}
                 for row in report["lines"]
             ]
-            return {
-                "lines": lines,
-                "total_debits": report["total_debits"],
-                "total_credits": report["total_credits"],
-            }
+            return {"lines": lines, "total": report["total"]}
         return {}
 '''
 

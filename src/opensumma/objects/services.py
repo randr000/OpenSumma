@@ -19,13 +19,13 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import ColumnElement, select
 from sqlalchemy.orm import Session
 
 from opensumma.kernel import (
-    Activity,
     EntryStatusError,
     JournalEntry,
     JournalEntryStatus,
@@ -33,6 +33,7 @@ from opensumma.kernel import (
     create_journal_entry,
     posted_activity,
 )
+from opensumma.money import ZERO
 from opensumma.objects.counterparties import resolve_counterparty
 from opensumma.objects.data import ensure_business_data
 from opensumma.objects.enums import AccountingObjectStatus, AccountingObjectType
@@ -75,13 +76,14 @@ class AccountingImpact:
     """What the ledger holds for an accounting object.
 
     ``entries`` are the journal entries linked to the object together with every
-    reversal of them, by id. ``activity`` is what those entries have posted, per
-    account code; drafts and voided entries contribute nothing.
+    reversal of them, by id. ``activity`` is the sum of what those entries have
+    posted, per account code, debits positive; drafts and voided entries contribute
+    nothing.
     """
 
     object_id: int
     entries: tuple[ImpactEntry, ...]
-    activity: Mapping[str, Activity]
+    activity: Mapping[str, Decimal]
 
     @property
     def pending_entry_ids(self) -> tuple[int, ...]:
@@ -102,9 +104,7 @@ class AccountingImpact:
     @property
     def has_net_impact(self) -> bool:
         """True while the ledger still carries a balance for the object."""
-        return any(
-            activity.debits != activity.credits for activity in self.activity.values()
-        )
+        return any(amount != ZERO for amount in self.activity.values())
 
 
 def create_accounting_object(

@@ -122,7 +122,9 @@ they misstate:
 - `actual` are the entries as the books hold them and `expected` as they should. An
   entry the books should not hold (a duplicate) appears only in `actual`; one they
   are missing (an accrual) only in `expected`, with `id` null; one that is wrong
-  appears in both, with the same `id`.
+  appears in both, with the same `id`. Each line gives its account, its signed
+  `amount` (a debit positive, a credit negative, as in the books), and its
+  dimensions: `{"account": "6700", "amount": "24.58", "dimensions": {...}}`.
 - `misstatement` is how far each account is off, debits positive, at the end of the
   first period the error affects. A misdated entry misstates that period and nothing
   after it; a dimension or vendor error misstates no account.
@@ -174,6 +176,11 @@ same ground truth, which `dataset` holds (`dataset.manifest`,
 - A test pins the fingerprint and ground truth of one small dataset, and CI runs it
   on Python 3.12 and 3.13. A change to the generator that changes its output must
   bump `GENERATOR_VERSION`, which both files record.
+- Version 2 (file format 2) records each journal line as one signed amount, in the
+  books and in the ground truth, and drops `trial_balance_total` from the manifest,
+  since a signed trial balance always totals zero. Its books hold the same entries,
+  amounts, and errors as version 1's for the same parameters; only their form, and so
+  the fingerprint, differs.
 
 ## How it is recorded
 

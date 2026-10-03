@@ -25,8 +25,8 @@ AWS: dict[str, Any] = {
     "entry_date": "2026-03-15",
     "description": "AWS, March",
     "lines": [
-        {"account": "6100", "debit": "120.50", "dimensions": {"DEPARTMENT": "ENG"}},
-        {"account": "2110", "credit": "120.50"},
+        {"account": "6100", "amount": "120.50", "dimensions": {"DEPARTMENT": "ENG"}},
+        {"account": "2110", "amount": "-120.50"},
     ],
 }
 
@@ -56,7 +56,8 @@ def test_an_entry_goes_from_proposal_to_the_ledger(mcp_as: McpServers) -> None:
         reason="Hosting",
         evidence=["vendor_id=42"],
     )
-    assert (entry["status"], entry["total_debits"]) == ("PROPOSED", "120.50")
+    assert (entry["status"], entry["total"]) == ("PROPOSED", "0.00")
+    assert [line["amount"] for line in entry["lines"]] == ["120.50", "-120.50"]
     assert entry["lines"][0]["dimensions"] == {"DEPARTMENT": "ENG"}
     entry_id = entry["id"]
 
@@ -71,10 +72,11 @@ def test_an_entry_goes_from_proposal_to_the_ledger(mcp_as: McpServers) -> None:
         assert mcp_as(actor)(tool, entry_id=entry_id)["status"] == status
 
     trial = mcp_as("reader")("get_trial_balance", as_of="2026-03-31")
-    assert [(line["account_code"], line["debit"]) for line in trial["lines"]] == [
-        ("2110", "0.00"),
+    assert [(line["account_code"], line["balance"]) for line in trial["lines"]] == [
+        ("2110", "-120.50"),
         ("6100", "120.50"),
     ]
+    assert trial["total"] == "0.00"
 
     reversal = mcp_as("poster")(
         "reverse_journal_entry",
@@ -107,11 +109,11 @@ def test_an_entry_goes_from_proposal_to_the_ledger(mcp_as: McpServers) -> None:
 
 
 def test_amounts_are_strings_and_a_float_never_gets_in(mcp_as: McpServers) -> None:
-    lines = [{"account": "6100", "debit": 120.5}, AWS["lines"][1]]
+    lines = [{"account": "6100", "amount": 120.5}, AWS["lines"][1]]
     result = mcp_as("agent").call("propose_journal_entry", **{**AWS, "lines": lines})
     assert result.is_error
     assert result.structured_content is None  # refused before the tool ran
-    assert "lines.0.debit" in result.content[0].text  # type: ignore[union-attr]
+    assert "lines.0.amount" in result.content[0].text  # type: ignore[union-attr]
     assert _audited(mcp_as.url, "propose_journal_entry") == []
 
 
@@ -120,9 +122,9 @@ def test_unknown_arguments_are_refused_not_ignored(mcp_as: McpServers) -> None:
     invented = agent.call("propose_journal_entry", **AWS, post_immediately=True)
     assert invented.is_error and invented.structured_content is None
 
+    old_form = {"account": "6100", "amount": "120.50", "debit": "120.50"}
     in_a_line = agent.call(
-        "propose_journal_entry",
-        **{**AWS, "lines": [{"account": "6100", "amount": "1.00"}, AWS["lines"][1]]},
+        "propose_journal_entry", **{**AWS, "lines": [old_form, AWS["lines"][1]]}
     )
     assert in_a_line.is_error and in_a_line.structured_content is None
 
@@ -137,8 +139,8 @@ def test_an_entry_the_kernel_cannot_record_is_refused_with_its_codes(
     mcp_as: McpServers,
 ) -> None:
     lines = [
-        {"account": "9999", "debit": "10.00"},
-        {"account": "2110", "credit": "10.005"},
+        {"account": "9999", "amount": "10.00"},
+        {"account": "2110", "amount": "-10.005"},
     ]
     refusal = mcp_as("agent").refusal(
         "propose_journal_entry", **{**AWS, "lines": lines}
@@ -156,8 +158,8 @@ def test_validation_reports_every_issue(mcp_as: McpServers) -> None:
     entry_id = _propose(
         agent,
         lines=[
-            {"account": "6000", "debit": "120.50"},
-            {"account": "2110", "credit": "100.00"},
+            {"account": "6000", "amount": "120.50"},
+            {"account": "2110", "amount": "-100.00"},
         ],
     )
     result = agent("validate_journal_entry", entry_id=entry_id)
@@ -327,8 +329,8 @@ def test_an_agent_takes_a_bill_through_the_workflow(mcp_as: McpServers) -> None:
     assert extracted["status"] == "EXTRACTED"
 
     lines = [
-        {"account": "6700", "debit": "45.00"},
-        {"account": "2110", "credit": "45.00"},
+        {"account": "6700", "amount": "45.00"},
+        {"account": "2110", "amount": "-45.00"},
     ]
     unsettled = agent.refusal(
         "propose_journal_entry",

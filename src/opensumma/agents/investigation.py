@@ -147,15 +147,10 @@ def trial_balance(task: TaskPrompt, tools: Tools) -> dict[str, Any]:
     found = use(tools, "get_trial_balance", as_of=find(DAY, task, "at what date"))
     return {
         "lines": [
-            {
-                "account": line["account_code"],
-                "debit": line["debit"],
-                "credit": line["credit"],
-            }
+            {"account": line["account_code"], "balance": line["balance"]}
             for line in found["lines"]
         ],
-        "total_debits": found["total_debits"],
-        "total_credits": found["total_credits"],
+        "total": found["total"],
     }
 
 
@@ -392,11 +387,11 @@ def unrecorded_receipts(task: TaskPrompt, tools: Tools) -> dict[str, Any]:
         raise ValueError("cannot tell which account the bank statement is for")
     (bank_account,) = shared
     receipts = [
-        Receipt(entry.id, entry.entry_date, Decimal(line["debit"]))
+        Receipt(entry.id, entry.entry_date, Decimal(line["amount"]))
         for entry in ledger.values()
         if entry.id not in recorded
         for line in entry.lines
-        if line["account_code"] == bank_account and Decimal(line["debit"])
+        if line["account_code"] == bank_account and Decimal(line["amount"]) > 0
     ]
     deposits = {
         line["id"]: line

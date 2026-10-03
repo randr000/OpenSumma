@@ -19,7 +19,6 @@ from opensumma.kernel.journal import (
     void_journal_entry,
 )
 from opensumma.kernel.ledger import (
-    Activity,
     LedgerLine,
     account_balance,
     activity_before,
@@ -30,11 +29,11 @@ from opensumma.kernel.models import JournalEntry
 
 
 def dr(account: str, amount: str, **dimensions: str) -> LineInput:
-    return LineInput(account, debit=Decimal(amount), dimensions=dimensions)
+    return LineInput(account, Decimal(amount), dimensions=dimensions)
 
 
 def cr(account: str, amount: str, **dimensions: str) -> LineInput:
-    return LineInput(account, credit=Decimal(amount), dimensions=dimensions)
+    return LineInput(account, -Decimal(amount), dimensions=dimensions)
 
 
 def record(session: Session, on: date, *lines: LineInput) -> JournalEntry:
@@ -66,8 +65,8 @@ def test_only_posted_entries_are_in_the_ledger(books: Session) -> None:
         post_journal_entry(books, unbalanced)
 
     assert posted_activity(books) == {
-        "1111": Activity(money("0.00"), money("100.00")),
-        "6100": Activity(money("100.00"), money("0.00")),
+        "1111": money("-100.00"),
+        "6100": money("100.00"),
     }
 
 
@@ -77,11 +76,13 @@ def test_a_reversed_entry_and_its_reversal_both_stay_in_the_ledger(
     entry = post(books, date(2026, 1, 5), dr("6100", "100.00"), cr("1111", "100.00"))
     reverse_journal_entry(books, entry, entry_date=date(2026, 1, 6))
 
-    assert posted_activity(books) == {
-        "1111": Activity(money("100.00"), money("100.00")),
-        "6100": Activity(money("100.00"), money("100.00")),
-    }
-    assert len(ledger_lines(books)) == 4
+    assert posted_activity(books) == {"1111": money("0.00"), "6100": money("0.00")}
+    assert [(line.account_code, str(line.amount)) for line in ledger_lines(books)] == [
+        ("6100", "100.00"),
+        ("1111", "-100.00"),
+        ("6100", "-100.00"),
+        ("1111", "100.00"),
+    ]
 
 
 def test_date_bounds_are_inclusive(books: Session) -> None:
@@ -92,11 +93,9 @@ def test_date_bounds_are_inclusive(books: Session) -> None:
 
     assert posted_activity(books, start=date(2026, 1, 15), end=date(2026, 1, 31))[
         "6100"
-    ].debits == money("46.00")
-    assert posted_activity(books, end=date(2026, 1, 15))["6100"].debits == money(
-        "16.00"
-    )
-    assert activity_before(books, date(2026, 1, 15))["6100"].debits == money("1.00")
+    ] == money("46.00")
+    assert posted_activity(books, end=date(2026, 1, 15))["1111"] == money("-16.00")
+    assert activity_before(books, date(2026, 1, 15))["6100"] == money("1.00")
 
 
 def test_a_date_range_must_run_forwards_and_use_dates(books: Session) -> None:
@@ -106,25 +105,23 @@ def test_a_date_range_must_run_forwards_and_use_dates(books: Session) -> None:
         ledger_lines(books, end=datetime(2026, 1, 31, tzinfo=UTC))
 
 
-def test_a_balance_is_stated_in_the_accounts_normal_direction(books: Session) -> None:
+def test_a_balance_is_positive_for_a_debit_and_negative_for_a_credit(
+    books: Session,
+) -> None:
     post(books, date(2026, 1, 5), dr("1111", "1000.00"), cr("3100", "1000.00"))
     post(books, date(2026, 1, 6), dr("6600", "40.00"), cr("1590", "40.00"))
 
     bank = account_balance(books, "1111")
-    assert (bank.debits, bank.credits, bank.balance) == (
-        money("1000.00"),
-        money("0.00"),
-        money("1000.00"),
-    )
+    assert bank.balance == money("1000.00")
     assert bank.normal_balance is NormalBalance.DEBIT
 
     stock = account_balance(books, "3100")
-    assert stock.balance == money("1000.00")
+    assert stock.balance == money("-1000.00")
     assert stock.account_type is AccountType.EQUITY
 
     depreciation = account_balance(books, "1590")
     assert depreciation.normal_balance is NormalBalance.CREDIT
-    assert depreciation.balance == money("40.00")
+    assert depreciation.balance == money("-40.00")
 
 
 def test_a_parent_balance_is_the_sum_of_the_accounts_below_it(books: Session) -> None:
@@ -136,6 +133,7 @@ def test_a_parent_balance_is_the_sum_of_the_accounts_below_it(books: Session) ->
     assert account_balance(books, "1110").balance == money("500.00")
     assert account_balance(books, "1500").balance == money("450.00")  # net of 1590
     assert account_balance(books, "1000").balance == money("950.00")
+    assert account_balance(books, "3000").balance == money("-1000.00")
 
 
 def test_a_balance_can_be_taken_as_of_a_date(books: Session) -> None:
@@ -187,8 +185,7 @@ def test_ledger_lines_come_in_date_entry_and_line_order(books: Session) -> None:
         account_code="6200",
         description="Entry on 2026-01-10",
         memo=None,
-        debit=money("1.00"),
-        credit=money("0.00"),
+        amount=money("1.00"),
         dimensions=(("DEPARTMENT", "GA"), ("LOCATION", "HQ")),
     )
     assert [
@@ -218,7 +215,7 @@ def test_the_ledger_only_ever_grows(books: Session) -> None:
     assert len(snapshots[-1]) == len(snapshots[-2])  # a draft adds nothing
 
     books.commit()
-    first.lines[0].debit = money("1.00")
+    first.lines[0].amount = money("1.00")
     with pytest.raises(ImmutableEntryError):
         books.flush()
     books.rollback()
@@ -233,7 +230,7 @@ def test_activity_can_be_restricted_to_given_entries(books: Session) -> None:
     books.flush()
 
     assert posted_activity(books, entry_ids=[rent.id, draft.id]) == {
-        "6200": Activity(debits=money("200.00")),
-        "1111": Activity(credits=money("200.00")),
+        "6200": money("200.00"),
+        "1111": money("-200.00"),
     }
     assert posted_activity(books, entry_ids=[]) == {}

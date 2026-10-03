@@ -33,11 +33,11 @@ MARCH = date(2026, 3, 15)
 
 
 def debit(account: str, amount: str, **dimensions: str) -> LineInput:
-    return LineInput(account, debit=Decimal(amount), dimensions=dimensions)
+    return LineInput(account, Decimal(amount), dimensions=dimensions)
 
 
 def credit(account: str, amount: str, **dimensions: str) -> LineInput:
-    return LineInput(account, credit=Decimal(amount), dimensions=dimensions)
+    return LineInput(account, -Decimal(amount), dimensions=dimensions)
 
 
 def record(
@@ -96,35 +96,42 @@ def test_amounts_are_recorded_and_read_back_as_exact_decimals(books: Session) ->
     books.commit()
     books.expire_all()
 
-    assert [line.debit for line in entry.lines] == [
+    assert [line.amount for line in entry.lines] == [
         Decimal("0.10"),
         Decimal("0.20"),
-        Decimal("0.00"),
+        Decimal("-0.30"),
     ]
-    assert entry.total_debits == entry.total_credits == Decimal("0.30")
+    assert entry.total == Decimal("0.00")
 
 
-def test_a_line_is_never_both_a_debit_and_a_credit(books: Session) -> None:
-    both = LineInput("6100", debit=Decimal("5.00"), credit=Decimal("5.00"))
-    assert rejected(books, both, credit("1111", "5.00")) == ["DEBIT_AND_CREDIT@1"]
+def test_a_negative_amount_is_a_credit(books: Session) -> None:
+    entry = record(
+        books,
+        LineInput("6100", Decimal("5.00")),
+        LineInput("1111", Decimal("-5.00")),
+    )
+
+    assert entry.is_balanced
+    assert validate_journal_entry(books, entry) == []
+    post_journal_entry(books, entry)
+    assert [line.amount for line in entry.lines] == [Decimal("5.00"), Decimal("-5.00")]
 
 
-@pytest.mark.parametrize(
-    "line",
-    [
-        LineInput("6100", debit=Decimal("-5.00")),
-        LineInput("6100", credit=Decimal("-5.00")),
-        LineInput("6100", debit=Decimal("10.00"), credit=Decimal("-5.00")),
-    ],
-)
-def test_negative_amounts_are_rejected(books: Session, line: LineInput) -> None:
-    assert rejected(books, line, credit("1111", "5.00")) == ["NEGATIVE_AMOUNT@1"]
+def test_a_zero_amount_line_is_recorded_and_posted(books: Session) -> None:
+    entry = record(
+        books,
+        debit("6100", "5.00"),
+        LineInput("6200", Decimal("0.00"), memo="Nothing charged this month"),
+        credit("1111", "5.00"),
+    )
+    assert validate_journal_entry(books, entry) == []
 
+    post_journal_entry(books, entry)
+    books.commit()
+    books.expire_all()
 
-def test_zero_amount_lines_are_rejected(books: Session) -> None:
-    assert rejected(books, LineInput("6100"), credit("1111", "5.00")) == [
-        "ZERO_AMOUNT@1"
-    ]
+    assert entry.status is JournalEntryStatus.POSTED
+    assert [str(line.amount) for line in entry.lines] == ["5.00", "0.00", "-5.00"]
 
 
 @pytest.mark.parametrize(
@@ -133,7 +140,7 @@ def test_zero_amount_lines_are_rejected(books: Session) -> None:
     ids=["fraction-of-a-cent", "nan", "float", "int"],
 )
 def test_amounts_are_never_rounded_or_coerced(books: Session, amount: object) -> None:
-    line = LineInput("6100", debit=amount)  # type: ignore[arg-type]
+    line = LineInput("6100", amount)  # type: ignore[arg-type]
     assert rejected(books, line, credit("1111", "5.00")) == ["INVALID_AMOUNT@1"]
 
 
@@ -162,21 +169,18 @@ def test_every_problem_is_reported_at_once_and_nothing_is_recorded(
 ) -> None:
     issues = rejected(
         books,
-        debit("9999", "-1.00"),
-        LineInput("6100", debit=Decimal("1.00"), credit=Decimal("1.00")),
-        LineInput("1111"),
-        LineInput("1111", debit=Decimal("0.001"), dimensions={"PROJECT": "X"}),
+        credit("9999", "1.00"),
+        LineInput("6100", Decimal("0.001"), dimensions={"PROJECT": "X"}),
+        LineInput("1111", Decimal("0.00"), memo="x" * 501),
         description="",
     )
 
     assert issues == [
         "MISSING_DESCRIPTION",
-        "NEGATIVE_AMOUNT@1",
         "UNKNOWN_ACCOUNT@1",
-        "DEBIT_AND_CREDIT@2",
-        "ZERO_AMOUNT@3",
-        "INVALID_AMOUNT@4",
-        "UNKNOWN_DIMENSION@4",
+        "INVALID_AMOUNT@2",
+        "UNKNOWN_DIMENSION@2",
+        "TEXT_TOO_LONG@3",
     ]
     assert books.scalars(select(JournalEntry)).all() == []
 
@@ -243,7 +247,14 @@ def test_a_multi_line_entry_posts(books: Session) -> None:
     post_journal_entry(books, payroll)
 
     assert payroll.status is JournalEntryStatus.POSTED
-    assert payroll.total_debits == payroll.total_credits == Decimal("17224.00")
+    assert [str(line.amount) for line in payroll.lines] == [
+        "10000.00",
+        "6000.00",
+        "1224.00",
+        "-4424.00",
+        "-12800.00",
+    ]
+    assert payroll.total == Decimal("0.00")
 
 
 def test_an_unbalanced_entry_is_drafted_but_cannot_post(books: Session) -> None:
@@ -375,7 +386,7 @@ def posted(books: Session) -> JournalEntry:
     return entry
 
 
-def test_a_reversal_is_a_new_posted_entry_with_every_side_swapped(
+def test_a_reversal_is_a_new_posted_entry_with_every_amount_negated(
     books: Session, posted: JournalEntry
 ) -> None:
     reversal = reverse_journal_entry(books, posted, entry_date=date(2026, 4, 1))
@@ -387,9 +398,9 @@ def test_a_reversal_is_a_new_posted_entry_with_every_side_swapped(
     assert reversal.reversal_of is posted
     assert posted.reversed_by is reversal
     assert posted.status is JournalEntryStatus.REVERSED
-    assert [
-        (line.account.code, line.debit, line.credit) for line in reversal.lines
-    ] == [(line.account.code, line.credit, line.debit) for line in posted.lines]
+    assert [(line.account.code, line.amount) for line in reversal.lines] == [
+        (line.account.code, -line.amount) for line in posted.lines
+    ]
     assert reversal.description == f"Reversal of journal entry {posted.id}"
 
 
@@ -400,7 +411,7 @@ def test_an_entry_and_its_reversal_net_every_account_to_zero(
 
     net: defaultdict[str, Decimal] = defaultdict(Decimal)
     for line in (*posted.lines, *reversal.lines):
-        net[line.account.code] += line.debit - line.credit
+        net[line.account.code] += line.amount
     assert set(net.values()) == {Decimal("0.00")}
 
 
@@ -435,8 +446,8 @@ def test_a_reversal_can_itself_be_reversed(
     reinstated = reverse_journal_entry(books, reversal, entry_date=date(2026, 4, 2))
 
     assert reversal.status is JournalEntryStatus.REVERSED
-    assert [(line.debit, line.credit) for line in reinstated.lines] == [
-        (line.debit, line.credit) for line in posted.lines
+    assert [line.amount for line in reinstated.lines] == [
+        line.amount for line in posted.lines
     ]
 
 
@@ -469,13 +480,23 @@ def test_a_rejected_reversal_changes_nothing(
 # Raw SQL, because the ORM would refuse these writes before the database saw them.
 
 
-def test_the_database_rejects_a_line_with_two_sides(books: Session) -> None:
+def test_the_database_holds_one_signed_amount_per_line_in_cents(
+    books: Session,
+) -> None:
     entry = record(books, debit("6100", "5.00"), credit("1111", "5.00"))
     books.commit()
 
+    stored = books.scalars(
+        text(
+            "SELECT amount FROM journal_line WHERE journal_entry_id = :id "
+            "ORDER BY line_number"
+        ),
+        {"id": entry.id},
+    ).all()
+    assert stored == [500, -500]
     with pytest.raises(IntegrityError):
         books.execute(
-            text("UPDATE journal_line SET credit = 500 WHERE id = :id"),
+            text("UPDATE journal_line SET amount = NULL WHERE id = :id"),
             {"id": entry.lines[0].id},
         )
 

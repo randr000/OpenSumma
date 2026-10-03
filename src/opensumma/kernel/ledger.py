@@ -8,6 +8,11 @@ It is immutable and append-only because posted entries are: once an entry reache
 the ledger, its lines never change and it never leaves, which the session hooks in
 ``models`` enforce. Reports read the ledger through this module and nothing else,
 so no report can see anything that has not been posted.
+
+Amounts and balances follow the lines' sign: a debit, or a debit balance, is
+positive, and a credit, or a credit balance, negative. An account's balance is
+therefore the sum of its posted amounts, and the balances of all accounts together
+sum to zero.
 """
 
 from collections.abc import Iterable
@@ -32,33 +37,13 @@ from opensumma.utc import ensure_date
 
 
 @dataclass(frozen=True)
-class Activity:
-    """Posted debits and credits, on one account or summed over several."""
-
-    debits: Decimal = ZERO
-    credits: Decimal = ZERO
-
-    def __add__(self, other: "Activity") -> "Activity":
-        return Activity(self.debits + other.debits, self.credits + other.credits)
-
-    def balance(self, normal_balance: NormalBalance) -> Decimal:
-        """The balance stated on the ``normal_balance`` side.
-
-        Positive when the activity leaves a balance on that side, negative when it
-        leaves one on the other.
-        """
-        if normal_balance is NormalBalance.DEBIT:
-            return self.debits - self.credits
-        return self.credits - self.debits
-
-
-@dataclass(frozen=True)
 class AccountBalance:
-    """An account's posted debits and credits, and the balance they leave.
+    """The sum of an account's posted amounts.
 
-    ``balance`` is stated in the account's normal direction, so it is positive
-    when the account carries its usual balance: a bank account with money in it,
-    a payable that is owed, accumulated depreciation that has built up.
+    ``balance`` is positive for a debit balance and negative for a credit balance,
+    whatever the account's normal balance: a bank account with money in it is
+    positive, a payable that is owed and accumulated depreciation that has built up
+    are negative.
     """
 
     account_code: str
@@ -66,8 +51,6 @@ class AccountBalance:
     account_type: AccountType
     normal_balance: NormalBalance
     as_of: date | None
-    debits: Decimal
-    credits: Decimal
     balance: Decimal
 
 
@@ -84,8 +67,7 @@ class LedgerLine:
     account_code: str
     description: str
     memo: str | None
-    debit: Decimal
-    credit: Decimal
+    amount: Decimal
     dimensions: tuple[tuple[str, str], ...]
 
 
@@ -96,12 +78,13 @@ def posted_activity(
     end: date | None = None,
     account_codes: Iterable[str] | None = None,
     entry_ids: Iterable[int] | None = None,
-) -> dict[str, Activity]:
-    """Posted debits and credits per account code, for entries dated in range.
+) -> dict[str, Decimal]:
+    """The sum of the posted amounts per account code, for entries dated in range.
 
     Both bounds are inclusive and either may be omitted. ``entry_ids`` restricts
     the result to those journal entries; any of them not in the ledger contribute
-    nothing. Accounts with no posted lines in the range are absent from the result.
+    nothing. Accounts with no posted lines in the range are absent from the result;
+    an account whose lines cancel out is present, with zero.
     """
     where = _ledger_filter(start, end)
     if account_codes is not None:
@@ -117,23 +100,20 @@ def account_balance(
     """The balance of account ``code`` from its posted lines dated up to ``as_of``.
 
     Without ``as_of``, the whole ledger counts. A parent account's balance is the
-    sum of the accounts below it, stated in the parent's normal direction, so a
-    contra account reduces it: fixed assets are shown net of depreciation.
+    sum of the accounts below it, so a contra account reduces it: fixed assets are
+    shown net of depreciation.
     """
     account = get_account(session, code)
     codes = [account.code, *(below.code for below in descendants(account))]
-    activity = sum(
-        posted_activity(session, end=as_of, account_codes=codes).values(), Activity()
-    )
     return AccountBalance(
         account_code=account.code,
         account_name=account.name,
         account_type=account.account_type,
         normal_balance=account.normal_balance,
         as_of=as_of,
-        debits=activity.debits,
-        credits=activity.credits,
-        balance=activity.balance(account.normal_balance),
+        balance=sum(
+            posted_activity(session, end=as_of, account_codes=codes).values(), ZERO
+        ),
     )
 
 
@@ -170,8 +150,9 @@ def ledger_lines(
 
 def activity_before(
     session: Session, before: date, *, account_codes: Iterable[str] | None = None
-) -> dict[str, Activity]:
-    """Posted debits and credits per account code, for entries dated before ``before``.
+) -> dict[str, Decimal]:
+    """The sum of the posted amounts per account code, for entries dated before
+    ``before``.
 
     This is what an account brings into a period: its opening balance.
     """
@@ -184,23 +165,18 @@ def activity_before(
     return _activity(session, where)
 
 
-def _activity(
-    session: Session, where: list[ColumnElement[bool]]
-) -> dict[str, Activity]:
+def _activity(session: Session, where: list[ColumnElement[bool]]) -> dict[str, Decimal]:
     # Money columns hold integer cents, so SUM is exact in SQL and comes back as a
     # two-decimal Decimal.
     statement = (
-        select(Account.code, func.sum(JournalLine.debit), func.sum(JournalLine.credit))
+        select(Account.code, func.sum(JournalLine.amount))
         .select_from(JournalLine)
         .join(JournalLine.entry)
         .join(JournalLine.account)
         .where(*where)
         .group_by(Account.code)
     )
-    return {
-        code: Activity(debits, credits)
-        for code, debits, credits in session.execute(statement)
-    }
+    return {code: total for code, total in session.execute(statement)}
 
 
 def _ledger_filter(start: date | None, end: date | None) -> list[ColumnElement[bool]]:
@@ -226,8 +202,7 @@ def _ledger_line(line: JournalLine) -> LedgerLine:
         account_code=line.account.code,
         description=line.entry.description,
         memo=line.memo,
-        debit=line.debit,
-        credit=line.credit,
+        amount=line.amount,
         dimensions=tuple(
             sorted(
                 (tag.value.dimension.code, tag.value.code) for tag in line.dimensions

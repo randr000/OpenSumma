@@ -60,9 +60,12 @@ def _codes(issues: object) -> set[IssueCode]:
 
 
 def _ledger_totals(session: Session) -> tuple[int, int]:
+    """The ledger's debits, its positive amounts, and its credits, its negative
+    ones, each added up in cents."""
     debits, credits = session.execute(
         text(
-            "SELECT COALESCE(SUM(l.debit), 0), COALESCE(SUM(l.credit), 0) "
+            "SELECT COALESCE(SUM(CASE WHEN l.amount > 0 THEN l.amount END), 0), "
+            "COALESCE(SUM(CASE WHEN l.amount < 0 THEN -l.amount END), 0) "
             "FROM journal_line l JOIN journal_entry e ON e.id = l.journal_entry_id "
             "WHERE e.status IN ('POSTED', 'REVERSED')"
         )
@@ -73,8 +76,8 @@ def _ledger_totals(session: Session) -> tuple[int, int]:
 def test_journal_entries_and_their_lines_exist(books: Session) -> None:
     entry = _record(
         books,
-        LineInput("6100", debit=Decimal("120.50"), dimensions={"DEPARTMENT": "ENG"}),
-        LineInput("1111", credit=Decimal("120.50")),
+        LineInput("6100", Decimal("120.50"), dimensions={"DEPARTMENT": "ENG"}),
+        LineInput("1111", Decimal("-120.50")),
     )
     books.commit()
     books.expire_all()
@@ -91,26 +94,46 @@ def test_journal_entries_and_their_lines_exist(books: Session) -> None:
 def test_amounts_use_exact_decimal_arithmetic(books: Session) -> None:
     entry = _record(
         books,
-        LineInput("6100", debit=Decimal("0.10")),
-        LineInput("6200", debit=Decimal("0.20")),
-        LineInput("1111", credit=Decimal("0.30")),
+        LineInput("6100", Decimal("0.10")),
+        LineInput("6200", Decimal("0.20")),
+        LineInput("1111", Decimal("-0.30")),
     )
     post_journal_entry(books, entry)
     books.commit()
     books.expire_all()
 
-    assert all(isinstance(line.debit, Decimal) for line in entry.lines)
-    assert entry.total_debits == Decimal("0.30")  # 0.1 + 0.2 != 0.3 in floats
+    assert all(isinstance(line.amount, Decimal) for line in entry.lines)
+    assert entry.total == Decimal("0.00")  # 0.1 + 0.2 - 0.3 != 0 in floats
     assert _ledger_totals(books) == (30, 30)
+
+
+def test_a_line_carries_one_signed_amount(books: Session) -> None:
+    """A debit is positive and a credit negative, and a line may be zero."""
+    entry = _record(
+        books,
+        LineInput("6100", Decimal("75.00")),
+        LineInput("6200", Decimal("0.00")),
+        LineInput("1111", Decimal("-75.00")),
+    )
+    post_journal_entry(books, entry)
+    books.commit()
+    books.expire_all()
+
+    assert [(line.account.code, str(line.amount)) for line in entry.lines] == [
+        ("6100", "75.00"),
+        ("6200", "0.00"),
+        ("1111", "-75.00"),
+    ]
+    assert _ledger_totals(books) == (7500, 7500)
 
 
 def test_balanced_entries_validate(books: Session) -> None:
     entry = _record(
         books,
-        LineInput("6300", debit=Decimal("10000.00")),
-        LineInput("6310", debit=Decimal("765.00")),
-        LineInput("2130", credit=Decimal("2765.00")),
-        LineInput("1112", credit=Decimal("8000.00")),
+        LineInput("6300", Decimal("10000.00")),
+        LineInput("6310", Decimal("765.00")),
+        LineInput("2130", Decimal("-2765.00")),
+        LineInput("1112", Decimal("-8000.00")),
     )
 
     assert validate_journal_entry(books, entry) == []
@@ -121,8 +144,8 @@ def test_balanced_entries_validate(books: Session) -> None:
 def test_unbalanced_entries_fail(books: Session) -> None:
     entry = _record(
         books,
-        LineInput("6100", debit=Decimal("100.00")),
-        LineInput("1111", credit=Decimal("99.99")),
+        LineInput("6100", Decimal("100.00")),
+        LineInput("1111", Decimal("-99.99")),
     )
 
     with pytest.raises(JournalEntryError) as caught:
@@ -134,17 +157,17 @@ def test_invalid_accounts_fail(books: Session) -> None:
     with pytest.raises(JournalEntryError) as unknown:
         _record(
             books,
-            LineInput("9999", debit=Decimal("5.00")),
-            LineInput("1111", credit=Decimal("5.00")),
+            LineInput("9999", Decimal("5.00")),
+            LineInput("1111", Decimal("-5.00")),
         )
     assert _codes(unknown.value.issues) == {IssueCode.UNKNOWN_ACCOUNT}
 
     deactivate_account(get_account(books, "6900"))
     entry = _record(
         books,
-        LineInput("6000", debit=Decimal("5.00")),
-        LineInput("6900", debit=Decimal("5.00")),
-        LineInput("1111", credit=Decimal("10.00")),
+        LineInput("6000", Decimal("5.00")),
+        LineInput("6900", Decimal("5.00")),
+        LineInput("1111", Decimal("-10.00")),
     )
     assert _codes(validate_journal_entry(books, entry)) == {
         IssueCode.ACCOUNT_NOT_POSTABLE,
@@ -156,8 +179,8 @@ def test_closed_periods_fail(books: Session) -> None:
     close_period(get_period(books, "2026-03"))
     entry = _record(
         books,
-        LineInput("6100", debit=Decimal("5.00")),
-        LineInput("1111", credit=Decimal("5.00")),
+        LineInput("6100", Decimal("5.00")),
+        LineInput("1111", Decimal("-5.00")),
     )
 
     with pytest.raises(JournalEntryError) as caught:
@@ -168,26 +191,26 @@ def test_closed_periods_fail(books: Session) -> None:
 def test_posted_entries_cannot_be_mutated(books: Session) -> None:
     entry = _record(
         books,
-        LineInput("6100", debit=Decimal("5.00")),
-        LineInput("1111", credit=Decimal("5.00")),
+        LineInput("6100", Decimal("5.00")),
+        LineInput("1111", Decimal("-5.00")),
     )
     post_journal_entry(books, entry)
     books.commit()
 
-    entry.lines[0].debit = Decimal("50.00")
-    entry.lines[1].credit = Decimal("50.00")
+    entry.lines[0].amount = Decimal("50.00")
+    entry.lines[1].amount = Decimal("-50.00")
     with pytest.raises(ImmutableEntryError):
         books.commit()
     books.rollback()
 
-    assert entry.total_debits == Decimal("5.00")
+    assert [line.amount for line in entry.lines] == [Decimal("5.00"), Decimal("-5.00")]
 
 
 def test_reversals_create_new_entries(books: Session) -> None:
     original = _record(
         books,
-        LineInput("6100", debit=Decimal("5.00")),
-        LineInput("1111", credit=Decimal("5.00")),
+        LineInput("6100", Decimal("5.00")),
+        LineInput("1111", Decimal("-5.00")),
     )
     post_journal_entry(books, original)
     books.commit()

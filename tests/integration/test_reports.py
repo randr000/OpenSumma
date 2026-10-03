@@ -28,11 +28,11 @@ JAN_31 = date(2026, 1, 31)
 
 
 def dr(account: str, amount: str, memo: str | None = None, **dims: str) -> LineInput:
-    return LineInput(account, debit=Decimal(amount), memo=memo, dimensions=dims)
+    return LineInput(account, Decimal(amount), memo=memo, dimensions=dims)
 
 
 def cr(account: str, amount: str, memo: str | None = None, **dims: str) -> LineInput:
-    return LineInput(account, credit=Decimal(amount), memo=memo, dimensions=dims)
+    return LineInput(account, -Decimal(amount), memo=memo, dimensions=dims)
 
 
 def record(session: Session, on: date, text: str, *lines: LineInput) -> JournalEntry:
@@ -58,7 +58,7 @@ def amounts(section: StatementSection) -> list[tuple[str, int, str]]:
 # --- Trial balance ----------------------------------------------------------------
 
 
-def test_each_balance_sits_in_the_column_it_falls_in(books: Session) -> None:
+def test_each_balance_is_signed_and_the_balances_sum_to_zero(books: Session) -> None:
     post(
         books, date(2026, 1, 2), "Capital", dr("1111", "1000.00"), cr("3100", "1000.00")
     )
@@ -67,26 +67,22 @@ def test_each_balance_sits_in_the_column_it_falls_in(books: Session) -> None:
     report = trial_balance(books, as_of=JAN_31)
 
     assert [
-        (line.account_code, line.account_type, str(line.debit), str(line.credit))
+        (line.account_code, line.account_type, str(line.balance))
         for line in report.lines
     ] == [
-        ("1111", AccountType.ASSET, "1000.00", "0.00"),
-        ("2110", AccountType.LIABILITY, "0.00", "120.00"),
-        ("3100", AccountType.EQUITY, "0.00", "1000.00"),
-        ("6100", AccountType.EXPENSE, "120.00", "0.00"),
+        ("1111", AccountType.ASSET, "1000.00"),
+        ("2110", AccountType.LIABILITY, "-120.00"),
+        ("3100", AccountType.EQUITY, "-1000.00"),
+        ("6100", AccountType.EXPENSE, "120.00"),
     ]
     assert report.lines[0] == TrialBalanceLine(
-        "1111",
-        "Operating Bank Account",
-        AccountType.ASSET,
-        money("1000.00"),
-        money("0.00"),
+        "1111", "Operating Bank Account", AccountType.ASSET, money("1000.00")
     )
-    assert report.total_debits == report.total_credits == money("1120.00")
+    assert str(report.total) == "0.00"
     assert report.is_balanced
 
 
-def test_a_contra_balance_sits_in_the_opposite_column_to_its_type(
+def test_a_contra_balance_has_the_opposite_sign_to_its_type(
     books: Session,
 ) -> None:
     post(
@@ -102,11 +98,7 @@ def test_a_contra_balance_sits_in_the_opposite_column_to_its_type(
         for line in trial_balance(books, as_of=JAN_31).lines
         if line.account_code == "1590"
     )
-    assert (line.account_type, line.debit, line.credit) == (
-        AccountType.ASSET,
-        money("0.00"),
-        money("40.00"),
-    )
+    assert (line.account_type, line.balance) == (AccountType.ASSET, money("-40.00"))
 
 
 def test_accounts_that_net_to_nothing_are_left_off(books: Session) -> None:
@@ -118,14 +110,17 @@ def test_accounts_that_net_to_nothing_are_left_off(books: Session) -> None:
     report = trial_balance(books, as_of=JAN_31)
 
     assert report.lines == ()
-    assert report.total_debits == report.total_credits == money("0.00")
+    assert str(report.total) == "0.00"
 
 
 def test_the_trial_balance_is_taken_as_of_a_date(books: Session) -> None:
     post(books, date(2026, 1, 31), "January", dr("6100", "10.00"), cr("1111", "10.00"))
     post(books, date(2026, 2, 1), "February", dr("6100", "99.00"), cr("1111", "99.00"))
 
-    assert trial_balance(books, as_of=JAN_31).total_debits == money("10.00")
+    assert [
+        (line.account_code, line.balance)
+        for line in trial_balance(books, as_of=JAN_31).lines
+    ] == [("1111", money("-10.00")), ("6100", money("10.00"))]
     assert trial_balance(books, as_of=date(2025, 12, 31)).lines == ()
 
 
@@ -176,12 +171,15 @@ def test_the_general_ledger_carries_a_balance_from_opening_to_closing(
         "2110",
         NormalBalance.CREDIT,
     )
-    assert account.opening_balance == money("120.00")
-    assert [(line.description, str(line.balance)) for line in account.lines] == [
-        ("Pay AWS", "0.00"),
-        ("AWS February", "100.00"),
+    assert account.opening_balance == money("-120.00")
+    assert [
+        (line.description, str(line.amount), str(line.balance))
+        for line in account.lines
+    ] == [
+        ("Pay AWS", "120.00", "0.00"),
+        ("AWS February", "-100.00", "-100.00"),
     ]
-    assert account.closing_balance == money("100.00")
+    assert account.closing_balance == money("-100.00")
 
 
 def test_general_ledger_lines_keep_their_memos_and_dimensions(
@@ -210,7 +208,7 @@ def test_the_general_ledger_includes_accounts_with_only_a_balance_brought_forwar
         for account in report.accounts
     ] == [
         ("1111", "-120.00", 0),
-        ("2110", "100.00", 0),
+        ("2110", "-100.00", 0),
         ("6100", "220.00", 0),
     ]
 

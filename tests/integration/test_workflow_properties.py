@@ -165,8 +165,8 @@ def test_the_workflow_keeps_its_guarantees_whatever_is_attempted(
             entry_date=date(2026, 3, 15),
             description="Generated",
             lines=[
-                LineInput("6200", debit=Decimal("500.00")),
-                LineInput("1111", credit=credit),
+                LineInput("6200", Decimal("500.00")),
+                LineInput("1111", -credit),
             ],
         )
         session.flush()
@@ -208,7 +208,6 @@ def test_the_workflow_keeps_its_guarantees_whatever_is_attempted(
                 assert P.POSTER in transition.actor.permissions
 
         # Nothing unbalanced reached the ledger, and the ledger balances.
-        activity = posted_activity(session).values()
-        assert sum(a.debits for a in activity) == sum(a.credits for a in activity)
+        assert sum(posted_activity(session).values(), Decimal("0.00")) == 0
         if not balanced:
             assert not entry.status.in_ledger

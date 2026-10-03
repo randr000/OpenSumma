@@ -48,8 +48,8 @@ from opensumma.workflow import (
 Status = JournalEntryStatus
 MARCH_15 = date(2026, 3, 15)
 RENT = (
-    LineInput("6200", debit=Decimal("2500.00")),
-    LineInput("1111", credit=Decimal("2500.00")),
+    LineInput("6200", Decimal("2500.00")),
+    LineInput("1111", Decimal("-2500.00")),
 )
 
 
@@ -108,8 +108,8 @@ def test_a_proposal_the_kernel_cannot_record_leaves_no_trace(
         _propose(
             books,
             agent,
-            LineInput("9999", debit=Decimal("10.00")),
-            LineInput("1111", credit=Decimal("10.00")),
+            LineInput("9999", Decimal("10.00")),
+            LineInput("1111", Decimal("-10.00")),
         )
     books.flush()
     assert [issue.code for issue in caught.value.issues] == [IssueCode.UNKNOWN_ACCOUNT]
@@ -123,8 +123,8 @@ def test_an_unbalanced_proposal_is_recorded_but_cannot_be_submitted(
     entry = _propose(
         books,
         agent,
-        LineInput("6200", debit=Decimal("2500.00")),
-        LineInput("1111", credit=Decimal("2400.00")),
+        LineInput("6200", Decimal("2500.00")),
+        LineInput("1111", Decimal("-2400.00")),
     )
     assert [i.code for i in validate_journal_entry(books, entry, actor=agent)] == [
         IssueCode.UNBALANCED
@@ -209,8 +209,8 @@ def test_a_rejected_entry_returns_to_its_preparer_for_correction(
     assert entry.status is Status.PROPOSED
 
     # Its content can be corrected again, then it goes round once more.
-    entry.lines[0].debit = Decimal("2450.00")
-    entry.lines[1].credit = Decimal("2450.00")
+    entry.lines[0].amount = Decimal("2450.00")
+    entry.lines[1].amount = Decimal("-2450.00")
     books.commit()
     submit_for_approval(books, entry, actor=clerk)
     approve_journal_entry(books, entry, actor=controller)
@@ -243,14 +243,14 @@ def test_what_is_under_review_or_approved_cannot_change(
         books.flush()
     books.rollback()
 
-    entry.lines[0].debit = Decimal("9999.00")
+    entry.lines[0].amount = Decimal("9999.00")
     with pytest.raises(ImmutableEntryError):
         books.flush()
     books.rollback()
 
     entry.lines.append(
         JournalLine(
-            line_number=3, account=get_account(books, "6100"), debit=Decimal("1.00")
+            line_number=3, account=get_account(books, "6100"), amount=Decimal("1.00")
         )
     )
     with pytest.raises(ImmutableEntryError):

@@ -53,6 +53,13 @@ def test_ensure_money_accepts_exact_cents_without_changing_them(
     assert result.as_tuple().exponent == -2
 
 
+@pytest.mark.parametrize("value", [Decimal("-0.00"), -Decimal("0.00"), Decimal("-0")])
+def test_ensure_money_never_returns_a_negative_zero(value: Decimal) -> None:
+    """Negating a zero amount, as a credit or a reversal does, gives -0.00, which
+    must not reach the books or print as "-0.00"."""
+    assert str(ensure_money(value)) == "0.00"
+
+
 @pytest.mark.parametrize(
     "value", [Decimal("0.005"), Decimal("NaN"), Decimal("Infinity"), Decimal("1E+30")]
 )

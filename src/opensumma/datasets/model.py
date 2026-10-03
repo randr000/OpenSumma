@@ -26,17 +26,12 @@ OPERATING_ACCOUNT = "1111"
 
 @dataclass(frozen=True)
 class Line:
-    """One journal line. ``dimensions`` holds ``(dimension, value)`` pairs, sorted."""
+    """One journal line: its signed ``amount``, debits positive and credits
+    negative. ``dimensions`` holds ``(dimension, value)`` pairs, sorted."""
 
     account: str
-    debit: Decimal = ZERO
-    credit: Decimal = ZERO
+    amount: Decimal
     dimensions: tuple[tuple[str, str], ...] = ()
-
-    @property
-    def net(self) -> Decimal:
-        """The line's effect on its account, debits positive."""
-        return self.debit - self.credit
 
     def dimension(self, code: str) -> str | None:
         return dict(self.dimensions).get(code)
@@ -97,12 +92,12 @@ class Transaction:
 
     @property
     def is_balanced(self) -> bool:
-        return sum((line.net for line in self.lines), ZERO) == ZERO
+        return sum((line.amount for line in self.lines), ZERO) == ZERO
 
     @property
     def amount(self) -> Decimal:
         """The total of the entry's debits."""
-        return sum((line.debit for line in self.lines), ZERO)
+        return sum((line.amount for line in self.lines if line.amount > ZERO), ZERO)
 
 
 @dataclass(frozen=True)
@@ -166,5 +161,5 @@ def net_by_account(
         if through is not None and transaction.entry_date > through:
             continue
         for line in transaction.lines:
-            totals[line.account] = totals.get(line.account, ZERO) + line.net
+            totals[line.account] = totals.get(line.account, ZERO) + line.amount
     return {account: net for account, net in sorted(totals.items()) if net != ZERO}

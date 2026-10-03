@@ -68,9 +68,9 @@ def get_account_balance(
     ctx: ToolContext, code: str, as_of: date | None = None
 ) -> schemas.BalanceOut:
     """The posted balance of an account, and of the accounts below it, up to and
-    including ``as_of`` (the whole ledger if omitted). The balance is stated in the
-    account's normal direction, so it is positive when the account carries its
-    usual balance."""
+    including ``as_of`` (the whole ledger if omitted). The balance is signed:
+    positive for a debit balance and negative for a credit balance, so a payable
+    that is owed is negative."""
     with reading(ctx) as session:
         return views.balance(kernel.account_balance(session, code, as_of=as_of))
 
@@ -101,7 +101,8 @@ def get_counterparties(
 
 def get_journal_entry(ctx: ToolContext, entry_id: int) -> schemas.JournalEntryOut:
     """One journal entry, in any status, with its lines and the accounting objects
-    it records."""
+    it records. Line amounts are signed, debits positive and credits negative, and
+    ``total``, their sum, is zero when the entry balances."""
     with reading(ctx) as session:
         entry = kernel.get_journal_entry(session, entry_id)
         return views.journal_entry(session, entry)
@@ -115,7 +116,7 @@ def get_ledger(
 ) -> LedgerLines:
     """Posted ledger lines by date, entry, and line, optionally for some account
     codes, between two dates, both inclusive. Only posted entries are in the
-    ledger."""
+    ledger. Each line's amount is signed: a debit positive, a credit negative."""
     with reading(ctx) as session:
         found = kernel.ledger_lines(
             session, start=start, end=end, account_codes=accounts
@@ -124,7 +125,9 @@ def get_ledger(
 
 
 def get_trial_balance(ctx: ToolContext, as_of: date) -> schemas.TrialBalanceOut:
-    """The trial balance of the posted ledger as of a date."""
+    """The trial balance of the posted ledger as of a date: each account's balance,
+    positive for a debit balance and negative for a credit balance, and their total,
+    which is zero when the ledger balances."""
     with reading(ctx) as session:
         return views.trial_balance(kernel.trial_balance(session, as_of=as_of))
 
@@ -151,7 +154,8 @@ def get_general_ledger(
 ) -> schemas.GeneralLedgerOut:
     """Each account's opening balance, posted lines with a running balance, and
     closing balance between two dates, for every account or for one account code
-    and the accounts below it."""
+    and the accounts below it. Amounts and balances are signed: debits positive,
+    credits negative."""
     with reading(ctx) as session:
         report = kernel.general_ledger(
             session, start=start, end=end, account_code=account

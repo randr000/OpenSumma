@@ -2,12 +2,13 @@
 
 ## Current Phase:
 
-Phase 12 — PostgreSQL compatibility
+Signed journal amounts — a change of representation after Phase 12
 
 ## Current Status:
 
-Complete. All Phase 12 acceptance criteria are satisfied, and with them every phase of
-the specification's phase order.
+Complete. Journal lines carry one signed amount instead of separate debit and credit
+columns, throughout the kernel, the interfaces, the datasets, the benchmark, and the
+example agents. Every phase's acceptance tests still pass, on SQLite and PostgreSQL.
 
 ## Completed:
 
@@ -73,34 +74,41 @@ rules through the MCP tools alone, audit every change with its reason and eviden
 and together score 1.0 on all sixteen benchmark tasks of the standard dataset. See
 [docs/agents.md](docs/agents.md).
 
-Phase 12 acceptance criteria (CLAUDE.md names the phase but lists no criteria; these
-were set for it):
-
-- [x] PostgreSQL connection works (psycopg 3 through the `postgresql` extra; a URL
-  naming no driver, such as `postgresql://ledger:secret@db/books`, uses it)
-- [x] Migrations work on PostgreSQL (upgrade to head, downgrade to base, and upgrade
-  again, with the migrated schema exactly the models', `alembic check`; the data
-  migration of Phase 5 converts real rows there)
-- [x] The kernel, objects, workflow, audit log, REST, and MCP behave the same on
-  PostgreSQL (the whole suite runs there when `OPENSUMMA_TEST_POSTGRESQL_URL` names a
-  server: every test that takes a database from the fixtures gets one on it; all
-  823 pass there, and on SQLite all but the 12 that need PostgreSQL)
-- [x] Accounting invariants hold on PostgreSQL (exact money, UTC timestamps, JSON
-  business data refusing floats, immutable posted entries, closed periods refusing
-  postings, a balanced ledger and balance sheet, the property tests included)
-- [x] The same seed gives the same books on both backends (a dataset generated into
-  PostgreSQL has the SQLite dataset's fingerprint, ids, ground truth, and year-end
-  trial balance)
-- [x] Concurrent writers keep the books consistent (audit appends serialized;
-  workflow actions hold their subject; posting holds its period; each race run
-  deterministically on PostgreSQL, and many requests at once through the installed
-  REST server)
-- [x] The installed servers serve PostgreSQL (`python -m opensumma.api` and
-  `python -m opensumma.mcp` given a `postgresql://` URL)
-- [x] CI runs the suite on PostgreSQL (a job against a PostgreSQL 16 service)
-
-See [docs/architecture.md](docs/architecture.md#database) and
+Phase 12 — PostgreSQL compatibility. psycopg 3 through the `postgresql` extra; the
+migrations, kernel, objects, workflow, audit log, REST, and MCP behave the same on
+PostgreSQL, where the whole suite runs when `OPENSUMMA_TEST_POSTGRESQL_URL` names a
+server; the same seed gives the same books on both backends; concurrent writers keep
+the books consistent; and CI runs the suite on PostgreSQL. See
+[docs/architecture.md](docs/architecture.md#database) and
 [#concurrency](docs/architecture.md#concurrency).
+
+Signed journal amounts (after Phase 12, on request). Journal lines carried a
+non-negative debit and a non-negative credit, exactly one of them above zero; they now
+carry one signed `amount`, the algebraic sign convention: a debit is positive, a
+credit negative, and a line may be zero. Criteria set for the change:
+
+- [x] One `amount` column per journal line (signed integer cents), with a migration,
+  `db546c4d06cf`, that converts every existing line as `debit - credit` in SQL; its
+  downgrade splits them back, and refuses books holding a zero line, which the
+  earlier schema cannot represent
+- [x] An entry balances when its amounts sum to zero (`JournalEntry.total`); a
+  reversal negates every amount; the rules that a single signed amount makes
+  impossible to break, and the rule against zero lines, are gone with their issue
+  codes (`NEGATIVE_AMOUNT`, `DEBIT_AND_CREDIT`, `ZERO_AMOUNT`)
+- [x] Zero-amount lines are recorded, posted, and reported, and change no balance
+- [x] Balances are signed like the lines: account balances, the general ledger's
+  running balances, and a one-column trial balance whose total is zero; only the
+  income statement and balance sheet state amounts in each section's normal direction
+- [x] REST and MCP take and return signed amounts, and refuse a line written with the
+  former `debit` and `credit` fields; the tools' descriptions state the convention
+- [x] Datasets (generator version 2, format 2), their ground truth, the benchmark
+  (version 2), and the example agents use signed amounts. The books generated for a
+  seed hold the same entries, amounts, and errors as before, which was checked
+  against the previous generator; only their form, and so the fingerprint, changed.
+  Every task's score for the oracle is unchanged
+- [x] Every phase's acceptance tests pass, on SQLite and on PostgreSQL
+
+See [docs/accounting-model.md](docs/accounting-model.md#signed-amounts).
 
 ## In Progress:
 
@@ -285,62 +293,91 @@ license.
   so in its evidence.
 - Findings' reasons and evidence are recorded in `results.json` but not scored:
   nothing yet measures whether an agent's explanation is right, only its answer.
+- Datasets generated before signed amounts (generator version 1, format 1) cannot be
+  used: their books keep debits and credits apart, and the benchmark refuses them
+  with a message to generate them again, which gives the same entries for the same
+  parameters. `alembic upgrade head` would convert their books, but not their ground
+  truth, whose fingerprint would then no longer match. Benchmark version 2 words
+  GL-001 and GL-002 for signed balances and expects GL-002's answer, and the journal
+  entry tasks' lines, in the signed form, so an agent answering in the former form
+  scores less than before; the oracle's scores are unchanged.
+- An agent or script written for the former interface, which sends `debit` and
+  `credit` fields, is refused with a schema error and must send one signed `amount`
+  per line.
+- Audit events recorded before the change keep the form they were recorded in: their
+  inputs name `debit` and `credit`, and refusals may carry the retired issue codes
+  (`NEGATIVE_AMOUNT`, `DEBIT_AND_CREDIT`, `ZERO_AMOUNT`). The log is append-only and
+  hash-chained, so they are not converted.
+- Books holding a zero-amount line cannot be downgraded below revision
+  `db546c4d06cf`: the earlier schema has no way to store such a line, and the
+  downgrade refuses rather than altering posted lines.
+- An entry made only of zero lines balances, and so posts, although it records
+  nothing; no rule refuses it.
 
-## Design decisions made in Phase 12:
+## Design decisions made for signed amounts:
 
-Recorded in [docs/architecture.md](docs/architecture.md#database) and
+Recorded in [docs/accounting-model.md](docs/accounting-model.md#signed-amounts) and
+[#balances-and-signs](docs/accounting-model.md#balances-and-signs). Phase 12's are in
+[docs/architecture.md](docs/architecture.md#database) and
 [#concurrency](docs/architecture.md#concurrency).
 
-1. **Prove it with the suite that exists.** Rather than a separate PostgreSQL test
-   suite, the fixtures that hand tests a database create it on a PostgreSQL server
-   when one is named, so the same tests show the same behaviour on both backends.
-   PostgreSQL databases are copied from a template, as SQLite files are copied.
-2. **psycopg 3, optionally.** The driver is the `postgresql` extra, not a core
-   dependency, and a URL that names no driver uses it, since SQLAlchemy would
-   otherwise reach for psycopg2.
-3. **Concurrency is the difference that matters.** The schema and SQL were already
-   portable; what SQLite's one-writer-at-a-time had hidden was that rules checked in
-   Python can be broken by a transaction in between. Workflow operations lock the
-   subject they act on and re-read its state; posting holds its period against a
-   close; audit appends are serialized.
-4. **Portable locks where a row can stand for the thing.** `with_for_update`, which
-   SQLAlchemy renders for PostgreSQL and omits for SQLite, locks entries, objects,
-   and periods. Only the end of the audit log has no row, so it takes PostgreSQL's
-   advisory lock, the one piece of PostgreSQL-specific SQL, kept in `opensumma.db`
-   beside SQLite's foreign-key pragma. A head-of-log table was considered and
-   rejected: a new table, a migration, and a row every audited action updates, which
-   the audit capture would itself have to be kept from recording.
-5. **Races tested deterministically.** Each race is choreographed: the first
-   transaction acts and stays open while a second acts on the same record in
-   another thread. Without the locks the second succeeds on stale state; each lock
-   was removed in turn to see its test fail.
-6. **Datasets stay files.** The generator writes into any session, and a company
-   generated into PostgreSQL is the same books, but `erp dataset generate` and the
-   benchmark keep to SQLite files, which is what a dataset handed to an agent is.
+1. **One signed column, debits positive.** The algebraic sign convention: an entry
+   balances when its lines sum to zero, a reversal negates each amount, and an
+   account's balance is the sum of its amounts. The rules a single signed amount
+   cannot break, a negative debit or credit and a line that is both, went with their
+   issue codes rather than surviving as codes nothing can raise; so did the rule
+   against zero lines, which are now allowed.
+2. **Balances signed like the lines.** Account balances, the general ledger's
+   running balances, and the trial balance carry the lines' sign, so a balance is
+   the sum of the amounts an agent reads in the ledger, and the trial balance is one
+   column that totals zero. Each balance still reports its account's normal balance.
+3. **Statements in their sections' direction.** The income statement and balance
+   sheet keep stating revenue, liabilities, and equity as positive, as statements
+   are read; they had no debit and credit columns to merge, and their sections
+   already fix the side.
+4. **No derived debit and credit totals.** The entry's, trial balance's, and account
+   balance's separate debit and credit totals are gone rather than kept as derived
+   views, so nothing presents two columns. An entry's `total` is the sum of its
+   amounts, zero when it balances; the UNBALANCED message says which side is larger
+   and by how much.
+5. **Never -0.00.** Negating a zero amount gives `Decimal("-0.00")`, which would
+   print as such and change fingerprints. `ensure_money` returns `0.00` for it, and
+   the kernel negates by subtracting from zero.
+6. **Old datasets are generated again, not migrated.** The generator, the dataset
+   format, and the benchmark each took a new version; a dataset in the former format
+   is refused when loaded rather than failing in the middle of a run. Generated books
+   were compared with the previous generator's, entry by entry, before the pinned
+   fingerprints and results were updated.
+7. **A data migration in SQL, with no lossy downgrade.** `amount = debit - credit`
+   in one statement, so offline SQL generation includes it. The downgrade splits each
+   amount by its sign and refuses books holding a zero line instead of deleting or
+   inventing a side for it.
 
 ## Last Verification:
 
-2026-09-30, on Python 3.12.14 and 3.13.15, and PostgreSQL 16.2:
+2026-10-02, on Python 3.12.14 and PostgreSQL 16.2, after the change to signed amounts:
 
-- `pytest` on SQLite: 811 passed and 12 skipped, the tests that need a PostgreSQL
-  server (823 in all: 271 unit, 472 integration, 80 acceptance)
-- `pytest` on PostgreSQL, with `OPENSUMMA_TEST_POSTGRESQL_URL` naming a server that
-  requires a password, one holding "@", a space, and "%": 823 passed
+- `pytest` on SQLite: 816 passed and 12 skipped, the tests that need a PostgreSQL
+  server (828 in all: 274 unit, 473 integration, 81 acceptance)
+- `pytest` on PostgreSQL, with `OPENSUMMA_TEST_POSTGRESQL_URL` naming a local server:
+  828 passed
 - `ruff check .`: passed
 - `ruff format --check .`: passed
 - `mypy` (strict): passed
-- The package built as a wheel; installed non-editably with the `postgresql` extra
-  into a fresh Python 3.13 environment, the whole suite, Ruff, and mypy passed
-  against it.
-- The first run of the unchanged suite on PostgreSQL, before any Phase 12 fix, had
-  805 of its 807 tests pass; both failures were tests' own raw SQL on JSON columns.
+- Python 3.13 was not run this time; nothing in the change depends on the version.
+- The migration was run on books holding a posted entry with a dimension value on a
+  line, on SQLite and PostgreSQL: its lines became `debit - credit`, the dimension
+  survived the table's rebuild, `alembic check` found the schema equal to the
+  models, the downgrade restored the debits and credits, and books holding a zero
+  line were refused (all now in `test_migrations.py`).
+- Generated datasets were compared with the previous generator's: a
+  1,000-transaction company (seed 42) and the pinned 300-transaction one (seed 2026)
+  hold the same entries and lines, `amount` equal to the former `debit - credit` on
+  all 2,467 lines of the first, the same year-end figures, and the same ground truth
+  once its former lines are read as signed amounts. Only the fingerprints changed.
+- The oracle's benchmark results on the pinned dataset, before and after: the same
+  metrics and the same score on every task. They differ in the benchmark version, the
+  dataset fingerprint, GL-001's and GL-002's instructions, GL-002's answer, and the
+  journal entry tasks' expected lines.
 - The README's Python examples were executed in order on SQLite, and every printed
-  value matched. Its PostgreSQL commands, and the recipe in docs/datasets.md, were
-  run against the local server: `alembic upgrade head` from
-  `OPENSUMMA_DATABASE_URL`, then a 1,000-transaction company generated into
-  PostgreSQL, whose fingerprint is that of the same seed on SQLite.
-- Mutation checks, each caught by the concurrency tests on PostgreSQL and then
-  undone: audit appends not serialized (the chain broke under concurrent writers);
-  the workflow not holding its subject (two approvals, and two postings, of one
-  entry both succeeded); and posting not holding its period (a reversal reached a
-  period closed while it was being posted).
+  value matched.

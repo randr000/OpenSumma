@@ -177,7 +177,7 @@ def test_a_wrong_account_differs_from_the_right_one_only_in_its_account(
         assert posted.lines[0].account == details["posted_account"]
         assert correct.lines[0].account == details["correct_account"]
         assert posted.lines[1:] == correct.lines[1:]
-        assert posted.lines[0].debit == correct.lines[0].debit
+        assert posted.lines[0].amount == correct.lines[0].amount
 
 
 @pytest.mark.parametrize("dimension", ["DEPARTMENT", "LOCATION"])

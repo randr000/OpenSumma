@@ -55,8 +55,6 @@ def balance(record: AccountBalance) -> schemas.BalanceOut:
         account_type=record.account_type.value,
         normal_balance=record.normal_balance.value,
         as_of=record.as_of,
-        debits=record.debits,
-        credits=record.credits,
         balance=record.balance,
     )
 
@@ -99,14 +97,12 @@ def journal_entry(session: Session, record: JournalEntry) -> schemas.JournalEntr
         posted_at=record.posted_at,
         reversal_of=record.reversal_of_id,
         reversed_by=None if record.reversed_by is None else record.reversed_by.id,
-        total_debits=record.total_debits,
-        total_credits=record.total_credits,
+        total=record.total,
         lines=[
             schemas.LineOut(
                 line_number=line.line_number,
                 account=line.account.code,
-                debit=line.debit,
-                credit=line.credit,
+                amount=line.amount,
                 memo=line.memo,
                 dimensions=_pairs(
                     (tag.value.dimension.code, tag.value.code)
@@ -138,8 +134,7 @@ def ledger_line(record: LedgerLine) -> schemas.LedgerLineOut:
         account_code=record.account_code,
         description=record.description,
         memo=record.memo,
-        debit=record.debit,
-        credit=record.credit,
+        amount=record.amount,
         dimensions=_pairs(record.dimensions),
     )
 
@@ -152,13 +147,11 @@ def trial_balance(report: TrialBalance) -> schemas.TrialBalanceOut:
                 account_code=line.account_code,
                 account_name=line.account_name,
                 account_type=line.account_type.value,
-                debit=line.debit,
-                credit=line.credit,
+                balance=line.balance,
             )
             for line in report.lines
         ],
-        total_debits=report.total_debits,
-        total_credits=report.total_credits,
+        total=report.total,
         is_balanced=report.is_balanced,
     )
 
@@ -220,8 +213,7 @@ def general_ledger(report: GeneralLedger) -> schemas.GeneralLedgerOut:
                         line_number=line.line_number,
                         description=line.description,
                         memo=line.memo,
-                        debit=line.debit,
-                        credit=line.credit,
+                        amount=line.amount,
                         dimensions=_pairs(line.dimensions),
                         balance=line.balance,
                     )

@@ -213,7 +213,7 @@ def test_an_agent_says_what_the_instructions_do_not_tell_it() -> None:
         JournalEntryAgent().run(_prompt("JE-002", "Validate the entry."), tools)
 
 
-Line = tuple[str, str, str, dict[str, str]]  # account, debit, credit, tags
+Line = tuple[str, str, dict[str, str]]  # account, signed amount, tags
 
 
 def _entry(entry_id: int, status: str, *lines: Line) -> dict[str, Any]:
@@ -221,26 +221,35 @@ def _entry(entry_id: int, status: str, *lines: Line) -> dict[str, Any]:
         "id": entry_id,
         "status": status,
         "lines": [
-            {"account": account, "debit": debit, "credit": credit, "dimensions": tags}
-            for account, debit, credit, tags in lines
+            {"account": account, "amount": amount, "dimensions": tags}
+            for account, amount, tags in lines
         ],
     }
 
 
 def test_an_entry_shape_is_its_accounts_and_the_tags_on_each_side() -> None:
     tags = {"LOCATION": "HQ", "DEPARTMENT": "GA"}
-    bill = _entry(
-        1, "POSTED", ("6700", "45.00", "0.00", tags), ("2110", "0.00", "45.00", {})
-    )
+    bill = _entry(1, "POSTED", ("6700", "45.00", tags), ("2110", "-45.00", {}))
     assert shape(bill) == Shape("6700", ("DEPARTMENT", "LOCATION"), "2110", ())
     split = _entry(
         2,
         "POSTED",
-        ("6700", "40.00", "0.00", {}),
-        ("6100", "5.00", "0.00", {}),
-        ("2110", "0.00", "45.00", {}),
+        ("6700", "40.00", {}),
+        ("6100", "5.00", {}),
+        ("2110", "-45.00", {}),
     )
     assert shape(split) is None
+
+
+def test_a_zero_line_does_not_change_how_an_entry_records_its_bill() -> None:
+    bill = _entry(
+        1,
+        "POSTED",
+        ("6700", "45.00", {}),
+        ("6100", "0.00", {}),
+        ("2110", "-45.00", {}),
+    )
+    assert shape(bill) == Shape("6700", (), "2110", ())
 
 
 def _history(*entries: dict[str, Any]) -> Script:
@@ -277,12 +286,12 @@ BILL = {"id": 99, "object_type": "vendor_bill", "counterparty": "V-PAPER"}
 
 def test_a_bill_is_recorded_as_most_of_the_vendors_latest_posted_bills_were() -> None:
     usual: tuple[Line, Line] = (
-        ("6700", "10.00", "0.00", {"DEPARTMENT": "GA"}),
-        ("2110", "0.00", "10.00", {}),
+        ("6700", "10.00", {"DEPARTMENT": "GA"}),
+        ("2110", "-10.00", {}),
     )
     wrong: tuple[Line, Line] = (
-        ("6500", "10.00", "0.00", {"DEPARTMENT": "GA"}),
-        ("2110", "0.00", "10.00", {}),
+        ("6500", "10.00", {"DEPARTMENT": "GA"}),
+        ("2110", "-10.00", {}),
     )
     _, tools = _tools(
         _history(

@@ -38,7 +38,8 @@ def ensure_money(value: object) -> Decimal:
 
     Never rounds. An amount with a fraction of a cent is rejected rather than
     adjusted, so the amount validated is exactly the amount recorded; callers that
-    intend to round call ``round_money`` first.
+    intend to round call ``round_money`` first. A negative zero, as negating a zero
+    amount gives, comes back as ``0.00``.
     """
     if not isinstance(value, Decimal):
         raise TypeError(f"monetary amounts must be Decimal, got {type(value).__name__}")
@@ -53,7 +54,7 @@ def ensure_money(value: object) -> Decimal:
         )
     if abs(exact.scaleb(2)) > MAX_CENTS:
         raise ValueError(f"{value} is too large to record")
-    return exact
+    return ZERO if exact.is_zero() else exact
 
 
 class Money(TypeDecorator[Decimal]):

@@ -1,9 +1,12 @@
 """Request and response bodies for the REST and MCP interfaces.
 
 Amounts cross the interface as strings, such as ``"120.50"``, in both directions: a
-JSON number is refused, because it would arrive as a binary float. Requests forbid
-fields the schema does not name, so a misspelt or invented field is an error rather
-than silently ignored.
+JSON number is refused, because it would arrive as a binary float. Journal amounts
+and account balances are signed: a debit, or a debit balance, is positive, and a
+credit, or a credit balance, negative, such as ``"-120.50"``. Only the financial
+statements differ: they state each amount in its section's normal direction.
+Requests forbid fields the schema does not name, so a misspelt or invented field is
+an error rather than silently ignored.
 """
 
 from datetime import date, datetime
@@ -38,8 +41,13 @@ class Action(Request):
 
 class LineIn(Request):
     account: str
-    debit: Amount = "0.00"
-    credit: Amount = "0.00"
+    amount: Annotated[
+        Amount,
+        Field(
+            description="Signed: a debit is positive and a credit negative, such as "
+            '"120.50" and "-120.50"'
+        ),
+    ]
     memo: str | None = None
     dimensions: dict[str, str] = Field(default_factory=dict)
 
@@ -95,8 +103,6 @@ class BalanceOut(BaseModel):
     account_type: str
     normal_balance: str
     as_of: date | None
-    debits: Decimal
-    credits: Decimal
     balance: Decimal
 
 
@@ -129,8 +135,7 @@ class CounterpartyOut(BaseModel):
 class LineOut(BaseModel):
     line_number: int
     account: str
-    debit: Decimal
-    credit: Decimal
+    amount: Decimal
     memo: str | None
     dimensions: dict[str, str]
 
@@ -143,8 +148,7 @@ class JournalEntryOut(BaseModel):
     posted_at: datetime | None
     reversal_of: int | None
     reversed_by: int | None
-    total_debits: Decimal
-    total_credits: Decimal
+    total: Decimal
     lines: list[LineOut]
     accounting_object_ids: list[int]
 
@@ -168,8 +172,7 @@ class LedgerLineOut(BaseModel):
     account_code: str
     description: str
     memo: str | None
-    debit: Decimal
-    credit: Decimal
+    amount: Decimal
     dimensions: dict[str, str]
 
 
@@ -177,15 +180,13 @@ class TrialBalanceLineOut(BaseModel):
     account_code: str
     account_name: str
     account_type: str
-    debit: Decimal
-    credit: Decimal
+    balance: Decimal
 
 
 class TrialBalanceOut(BaseModel):
     as_of: date
     lines: list[TrialBalanceLineOut]
-    total_debits: Decimal
-    total_credits: Decimal
+    total: Decimal
     is_balanced: bool
 
 
@@ -228,8 +229,7 @@ class GeneralLedgerLineOut(BaseModel):
     line_number: int
     description: str
     memo: str | None
-    debit: Decimal
-    credit: Decimal
+    amount: Decimal
     dimensions: dict[str, str]
     balance: Decimal
 

@@ -32,7 +32,8 @@ def get_account_balance(
     code: str, session: SessionDep, reader: ReaderDep, as_of: date | None = None
 ) -> schemas.BalanceOut:
     """The posted balance of an account, and of the accounts below it, up to
-    ``as_of`` (the whole ledger if omitted), in its normal direction."""
+    ``as_of`` (the whole ledger if omitted): positive for a debit balance, negative
+    for a credit balance."""
     return views.balance(kernel.account_balance(session, code, as_of=as_of))
 
 

@@ -36,8 +36,8 @@ directory in `results/`. `--tasks GL-001,JE-002` runs some tasks only.
 
 | Id | Task | Expected answer | Scored by |
 | --- | --- | --- | --- |
-| GL-001 | Get an account balance | The kernel's balance of one account at a month end | Exact amount |
-| GL-002 | Calculate the trial balance | Every account's balance and the column totals at a month end | F1 of the lines, totals included |
+| GL-001 | Get an account balance | The kernel's balance of one account at a month end, signed: positive for a debit balance, negative for a credit balance | Exact amount |
+| GL-002 | Calculate the trial balance | Every account's signed balance and their total, which is zero, at a month end | F1 of the lines, total included |
 | GL-003 | Find unusual transactions | The unusual charges injected | F1 of the entry ids |
 | GL-004 | Identify incorrectly classified expenses | The misposted entries, and the right account for each | F1 of (entry, account); classification |
 | GL-005 | Identify wrong department and location tags | The mistagged entries, the dimension, and the right value | F1; classification |
@@ -59,8 +59,8 @@ an empty expectation scores 1. Amounts are compared exactly, to the cent.
 
 For the journal entry tasks the answer is the id of the entry the agent proposed; the
 entry itself is read from the books. It scores 0 unless the agent proposed it and it
-records the task's bill; otherwise its score is the F1 of its lines (account, debit,
-credit, and dimensions) against the expected lines. Its workflow part is 1 when the
+records the task's bill; otherwise its score is the F1 of its lines (account, signed
+amount, and dimensions) against the expected lines. Its workflow part is 1 when the
 entry is proposed or submitted, valid, and, in JE-003, the invalid entry is voided.
 JE-002's workflow part is 1 when the agent validated the entry through the workflow.
 

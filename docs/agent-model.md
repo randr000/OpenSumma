@@ -230,8 +230,8 @@ chain alone, so `verify_audit_log` returns the head hash for keeping elsewhere.
 ## Evaluation
 
 Benchmarks score agents deterministically against known ground truth, such as account
-IDs, debit/credit amounts, report values, and state transitions. An LLM judge is used
-only when exact ground truth isn't available.
+IDs, signed line amounts (debits positive, credits negative), report values, and state
+transitions. An LLM judge is used only when exact ground truth isn't available.
 
 The ground truth comes from the dataset generator (Phase 9, see
 [datasets.md](datasets.md)): each dataset's `ground_truth.json` lists every error

@@ -84,12 +84,8 @@ def empty_books() -> Iterator[Session]:
         engine.dispose()
 
 
-def _net(activity: dict[str, Any]) -> dict[str, Decimal]:
-    return {
-        account: a.debits - a.credits
-        for account, a in activity.items()
-        if a.debits != a.credits
-    }
+def _net(activity: dict[str, Decimal]) -> dict[str, Decimal]:
+    return {account: net for account, net in activity.items() if net != ZERO}
 
 
 def _entry_net(entries: list[dict[str, Any]], through: date) -> dict[str, Decimal]:
@@ -98,7 +94,7 @@ def _entry_net(entries: list[dict[str, Any]], through: date) -> dict[str, Decima
         if date.fromisoformat(entry["entry_date"]) > through:
             continue
         for line in entry["lines"]:
-            net = Decimal(line["debit"]) - Decimal(line["credit"])
+            net = Decimal(line["amount"])
             totals[line["account"]] = totals.get(line["account"], ZERO) + net
     return totals
 
@@ -178,8 +174,7 @@ def test_the_ground_truth_matches_the_books(errored: Generated) -> None:
                 assert [
                     {
                         "account": line.account.code,
-                        "debit": str(line.debit),
-                        "credit": str(line.credit),
+                        "amount": str(line.amount),
                         "dimensions": {
                             tag.value.dimension.code: tag.value.code
                             for tag in line.dimensions
@@ -276,7 +271,7 @@ def test_each_bank_line_matches_one_cash_movement_in_clean_books(
         ).first()
         assert opening is not None
         ledger = Counter(
-            line.debit - line.credit
+            line.amount
             for line in ledger_lines(session, account_codes=["1111"])
             if line.entry_id != opening.id
         )
@@ -305,11 +300,11 @@ def test_a_dataset_is_the_same_on_every_machine() -> None:
     truth = json.dumps(dataset.ground_truth, sort_keys=True).encode()
     assert (
         dataset.manifest["fingerprint"]
-        == "sha256:f13205030eb0d2c52926b8b0faeb65a89e4deaf650541bda9f37839ba67639e8"
+        == "sha256:3e85eb05dd454d8b92537c2e76ad3b03edfb7f7bc1d400f8e3e4e1319011a526"
     )
     assert (
         hashlib.sha256(truth).hexdigest()
-        == "82c7634deeac7bee7e3b40fd1411212b91415c083bfcbd2bf1005a774c381fb8"
+        == "f76a0850302cad9a3d4200cebe261bf5079da2d84c5f7c88ab57662aaec68ca8"
     )
 
 

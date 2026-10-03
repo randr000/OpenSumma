@@ -1,13 +1,16 @@
 """Journal entry services: record, validate, post, void, and reverse.
 
+Every line carries one signed amount: a debit is positive, a credit negative, and a
+line may be zero. An entry balances when its lines sum to zero.
+
 Two tiers of rules apply, and they are kept apart on purpose.
 
-**Recording** rejects what cannot be stored at all: a negative, zero, or two-sided
-line; an amount with a fraction of a cent; a reference to an account, dimension, or
-dimension value that does not exist. The database enforces the line shape as well.
+**Recording** rejects what cannot be stored at all: an amount that is not an exact
+``Decimal`` in whole cents; a reference to an account, dimension, or dimension value
+that does not exist.
 
-**Posting** rejects what cannot enter the ledger: fewer than two lines, debits that
-differ from credits, an aggregate or inactive account, a missing or closed period, or
+**Posting** rejects what cannot enter the ledger: fewer than two lines, amounts that
+do not sum to zero, an aggregate or inactive account, a missing or closed period, or
 a retired dimension value. A draft may break these rules, because it may still be
 incomplete and master data may change before it is posted, so they are checked at
 the moment of posting.
@@ -19,7 +22,7 @@ The kernel posts an entry from any status that is not yet final. Which statuses 
 which actors may post is the workflow engine's decision (Phase 5), not the kernel's.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -55,13 +58,13 @@ from opensumma.utc import ensure_date, utcnow
 class LineInput:
     """One proposed journal line, referring to master data by code.
 
-    ``dimensions`` maps a dimension code to one of its value codes, so a line can
-    carry at most one value per dimension.
+    ``amount`` is signed: positive for a debit, negative for a credit; it may be
+    zero. ``dimensions`` maps a dimension code to one of its value codes, so a line
+    can carry at most one value per dimension.
     """
 
     account: str
-    debit: Decimal = ZERO
-    credit: Decimal = ZERO
+    amount: Decimal
     memo: str | None = None
     dimensions: Mapping[str, str] = field(default_factory=dict)
 
@@ -202,7 +205,8 @@ def reverse_journal_entry(
     entry_date: date,
     description: str | None = None,
 ) -> JournalEntry:
-    """Post a new entry that offsets ``entry`` line by line, and mark it REVERSED.
+    """Post a new entry that offsets ``entry`` line by line, each amount negated,
+    and mark it REVERSED.
 
     Both entries stay in the ledger and together net to nothing. The reversal is
     validated like any other entry, so it needs an open period on ``entry_date``
@@ -229,8 +233,7 @@ def reverse_journal_entry(
             JournalLine(
                 line_number=line.line_number,
                 account=line.account,
-                debit=line.credit,
-                credit=line.debit,
+                amount=ZERO - line.amount,  # never -0.00
                 memo=line.memo,
                 dimensions=[
                     JournalLineDimension(value=tag.value) for tag in line.dimensions
@@ -261,22 +264,11 @@ def _build_line(
     def report(code: IssueCode, message: str) -> None:
         issues.append(ValidationIssue(code, message, number))
 
-    debit = _amount(spec.debit, "debit", report)
-    credit = _amount(spec.credit, "credit", report)
-    if debit is not None and credit is not None:
-        if debit < ZERO or credit < ZERO:
-            report(
-                IssueCode.NEGATIVE_AMOUNT,
-                f"amounts cannot be negative (debit {debit}, credit {credit})",
-            )
-        elif debit > ZERO and credit > ZERO:
-            report(
-                IssueCode.DEBIT_AND_CREDIT,
-                f"a line is a debit or a credit, not both (debit {debit}, "
-                f"credit {credit})",
-            )
-        elif debit == ZERO and credit == ZERO:
-            report(IssueCode.ZERO_AMOUNT, "a line needs a debit or a credit above zero")
+    amount: Decimal | None = None
+    try:
+        amount = ensure_money(spec.amount)
+    except (TypeError, ValueError) as error:
+        report(IssueCode.INVALID_AMOUNT, f"the amount is not exact: {error}")
 
     account = find_account(session, spec.account)
     if account is None:
@@ -297,27 +289,16 @@ def _build_line(
             f"a line memo is limited to {DESCRIPTION_LENGTH} characters",
         )
 
-    if issues or debit is None or credit is None or account is None:
+    if issues or amount is None or account is None:
         return None, issues
     line = JournalLine(
         line_number=number,
         account=account,
-        debit=debit,
-        credit=credit,
+        amount=amount,
         memo=spec.memo or None,
         dimensions=[JournalLineDimension(value=value) for value in values],
     )
     return line, []
-
-
-def _amount(
-    value: object, side: str, report: Callable[[IssueCode, str], None]
-) -> Decimal | None:
-    try:
-        return ensure_money(value)
-    except (TypeError, ValueError) as error:
-        report(IssueCode.INVALID_AMOUNT, f"{side} is not an exact amount: {error}")
-        return None
 
 
 def _description_issues(description: str) -> list[ValidationIssue]:

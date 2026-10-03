@@ -73,7 +73,6 @@ from opensumma.kernel.journal import (
 )
 from opensumma.kernel.ledger import (
     AccountBalance,
-    Activity,
     LedgerLine,
     account_balance,
     activity_before,
@@ -135,7 +134,6 @@ __all__ = [
     "AccountType",
     "AccountTypeMismatchError",
     "AccountingPeriod",
-    "Activity",
     "AlreadyPostedError",
     "BalanceSheet",
     "ClosedPeriodError",

@@ -240,22 +240,24 @@ def test_reports_and_the_ledger_derive_from_what_was_posted(
         (
             date(2026, 3, 1),
             [
-                LineInput("1111", debit=Decimal("10000.00")),
-                LineInput("3100", credit=Decimal("10000.00")),
+                LineInput("1111", Decimal("10000.00")),
+                LineInput("3100", Decimal("-10000.00")),
             ],
         ),
         (
             date(2026, 3, 15),
             [
-                LineInput("6100", debit=Decimal("120.50")),
-                LineInput("2110", credit=Decimal("120.50")),
+                LineInput("6100", Decimal("120.50")),
+                LineInput("2110", Decimal("-120.50")),
             ],
         ),
     )
     reader = mcp_as("reader")
 
     balance = reader("get_account_balance", code="6100", as_of="2026-03-31")
-    assert (balance["debits"], balance["balance"]) == ("120.50", "120.50")
+    assert balance["balance"] == "120.50"
+    payable = reader("get_account_balance", code="2110", as_of="2026-03-31")
+    assert (payable["normal_balance"], payable["balance"]) == ("CREDIT", "-120.50")
     before = reader("get_account_balance", code="6100", as_of="2026-03-14")
     assert before["balance"] == "0.00"
 
@@ -268,11 +270,13 @@ def test_reports_and_the_ledger_derive_from_what_was_posted(
     assert {line["entry_id"] for line in march_first["lines"]} == {capital}
 
     trial = reader("get_trial_balance", as_of="2026-03-31")
-    assert (trial["total_debits"], trial["total_credits"], trial["is_balanced"]) == (
-        "10120.50",
-        "10120.50",
-        True,
-    )
+    assert [(line["account_code"], line["balance"]) for line in trial["lines"]] == [
+        ("1111", "10000.00"),
+        ("2110", "-120.50"),
+        ("3100", "-10000.00"),
+        ("6100", "120.50"),
+    ]
+    assert (trial["total"], trial["is_balanced"]) == ("0.00", True)
     income = reader("get_income_statement", start="2026-03-01", end="2026-03-31")
     assert income["net_income"] == "-120.50"
     sheet = reader("get_balance_sheet", as_of="2026-03-31")
@@ -288,7 +292,8 @@ def test_reports_and_the_ledger_derive_from_what_was_posted(
     )
 
     entry = reader("get_journal_entry", entry_id=aws)
-    assert (entry["status"], entry["total_debits"]) == ("POSTED", "120.50")
+    assert (entry["status"], entry["total"]) == ("POSTED", "0.00")
+    assert [line["amount"] for line in entry["lines"]] == ["120.50", "-120.50"]
 
 
 def test_accounting_objects_are_found_by_their_business_data(

@@ -127,7 +127,7 @@ def test_accounting_invariants_hold_on_postgresql(database_url: str) -> None:
                 session,
                 entry_date=date(2026, 3, 2),
                 description="Stationery",
-                lines=[LineInput("6700", debit=a), LineInput("1111", credit=a)],
+                lines=[LineInput("6700", a), LineInput("1111", -a)],
             )
             for a in cents
         ]
@@ -137,11 +137,15 @@ def test_accounting_invariants_hold_on_postgresql(database_url: str) -> None:
 
         # Money is exact: 0.10 + 0.20 is 0.30, in the ledger and in SQL alike.
         summed: int = session.execute(
-            text("SELECT sum(debit) FROM journal_line WHERE debit > 0")
+            text("SELECT sum(amount) FROM journal_line WHERE amount > 0")
         ).scalar_one()
         assert summed == 30  # integer cents
         march = trial_balance(session, as_of=date(2026, 3, 31))
-        assert march.total_debits == march.total_credits == Decimal("0.30")
+        assert [(line.account_code, line.balance) for line in march.lines] == [
+            ("1111", Decimal("-0.30")),
+            ("6700", Decimal("0.30")),
+        ]
+        assert str(march.total) == "0.00"
         assert balance_sheet(session, as_of=date(2026, 3, 31)).is_balanced
 
         # Posted entries are immutable; unbalanced ones and closed periods refuse.
@@ -154,8 +158,8 @@ def test_accounting_invariants_hold_on_postgresql(database_url: str) -> None:
             entry_date=date(2026, 3, 3),
             description="Unbalanced",
             lines=[
-                LineInput("6700", debit=Decimal("1.00")),
-                LineInput("1111", credit=Decimal("0.99")),
+                LineInput("6700", Decimal("1.00")),
+                LineInput("1111", Decimal("-0.99")),
             ],
         )
         with pytest.raises(JournalEntryError):
@@ -166,8 +170,8 @@ def test_accounting_invariants_hold_on_postgresql(database_url: str) -> None:
             entry_date=date(2026, 3, 3),
             description="Too late",
             lines=[
-                LineInput("6700", debit=Decimal("1.00")),
-                LineInput("1111", credit=Decimal("1.00")),
+                LineInput("6700", Decimal("1.00")),
+                LineInput("1111", Decimal("-1.00")),
             ],
         )
         with pytest.raises(JournalEntryError) as refused:
@@ -293,8 +297,8 @@ def _propose(server: Server) -> int:
             "entry_date": "2026-03-10",
             "description": "Office supplies",
             "lines": [
-                {"account": "6700", "debit": "45.00"},
-                {"account": "2110", "credit": "45.00"},
+                {"account": "6700", "amount": "45.00"},
+                {"account": "2110", "amount": "-45.00"},
             ],
         },
     )
@@ -379,8 +383,8 @@ def test_the_mcp_server_serves_postgresql(server: Server) -> None:
                 "entry_date": "2026-03-11",
                 "description": "Paper Trail INV-6",
                 "lines": [
-                    {"account": "6700", "debit": "30.00"},
-                    {"account": "2110", "credit": "30.00"},
+                    {"account": "6700", "amount": "30.00"},
+                    {"account": "2110", "amount": "-30.00"},
                 ],
                 "reason": "Same vendor and account as INV-5",
                 "evidence": ["invoice=INV-6"],
@@ -388,4 +392,8 @@ def test_the_mcp_server_serves_postgresql(server: Server) -> None:
         )
         assert not proposed.is_error, proposed.content
         assert proposed.structured_content is not None
-        assert proposed.structured_content["total_debits"] == "30.00"
+        assert proposed.structured_content["total"] == "0.00"
+        assert [line["amount"] for line in proposed.structured_content["lines"]] == [
+            "30.00",
+            "-30.00",
+        ]

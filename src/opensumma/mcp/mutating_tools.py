@@ -56,11 +56,12 @@ def propose_journal_entry(
 ) -> schemas.JournalEntryOut:
     """Propose a journal entry (PROPOSER), linked to an accounting object if given.
 
-    Each line names an account code and either a debit or a credit, as a decimal
-    string such as "120.50", with optional dimensions such as {"DEPARTMENT":
-    "ENG"}. An entry that cannot be recorded at all is refused with issue codes;
-    one that can be recorded but not posted, such as an unbalanced one, is
-    proposed, and validate_journal_entry says why.
+    Each line names an account code and a signed amount, as a decimal string:
+    positive for a debit and negative for a credit, such as "120.50" and
+    "-120.50", with optional dimensions such as {"DEPARTMENT": "ENG"}. The amounts
+    of a balanced entry sum to zero. An entry that cannot be recorded at all is
+    refused with issue codes; one that can be recorded but not posted, such as an
+    unbalanced one, is proposed, and validate_journal_entry says why.
     """
     with acting(ctx) as (session, actor):
         obj = (
@@ -77,8 +78,7 @@ def propose_journal_entry(
                 lines=[
                     LineInput(
                         line.account,
-                        debit=Decimal(line.debit),
-                        credit=Decimal(line.credit),
+                        Decimal(line.amount),
                         memo=line.memo,
                         dimensions=line.dimensions,
                     )

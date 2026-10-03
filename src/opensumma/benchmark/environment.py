@@ -23,6 +23,7 @@ from opensumma.datasets import (
     MANIFEST_FILE,
     write_dataset,
 )
+from opensumma.datasets.generator import FORMAT
 from opensumma.datasets.rng import Rng
 from opensumma.db import create_engine
 from opensumma.workflow import (
@@ -74,13 +75,20 @@ def write_standard_dataset(directory: Path | str) -> DatasetFiles:
 
 
 def load_dataset(directory: Path | str) -> DatasetFiles:
-    """The dataset in ``directory``, whose ground truth must be for its books."""
+    """The dataset in ``directory``, in the current format, whose ground truth must
+    be for its books."""
     directory = Path(directory)
     for name in (BOOKS_FILE, MANIFEST_FILE, GROUND_TRUTH_FILE):
         if not (directory / name).is_file():
             raise FileNotFoundError(f"{directory} holds no dataset: {name} is missing")
     manifest = json.loads((directory / MANIFEST_FILE).read_text(encoding="utf-8"))
     truth = json.loads((directory / GROUND_TRUTH_FILE).read_text(encoding="utf-8"))
+    if manifest.get("format") != FORMAT:
+        raise ValueError(
+            f"the dataset in {directory} is in format {manifest.get('format')}, and "
+            f"this version reads format {FORMAT}, in which journal lines carry one "
+            "signed amount: generate it again"
+        )
     if manifest["fingerprint"] != truth["fingerprint"]:
         raise ValueError(f"the ground truth in {directory} is for other books")
     return DatasetFiles(directory, manifest, truth)

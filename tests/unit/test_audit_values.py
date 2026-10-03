@@ -18,7 +18,7 @@ from opensumma.workflow import (
 
 
 def test_values_become_exact_json() -> None:
-    line = LineInput("5200", debit=Decimal("310.00"), dimensions={"DEPARTMENT": "ENG"})
+    line = LineInput("5200", Decimal("310.00"), dimensions={"DEPARTMENT": "ENG"})
     assert audit_json(
         {
             "line": line,
@@ -32,8 +32,7 @@ def test_values_become_exact_json() -> None:
     ) == {
         "line": {
             "account": "5200",
-            "debit": "310.00",
-            "credit": "0.00",
+            "amount": "310.00",
             "memo": None,
             "dimensions": {"DEPARTMENT": "ENG"},
         },

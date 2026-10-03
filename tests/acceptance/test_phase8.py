@@ -32,8 +32,8 @@ PROPOSAL: dict[str, Any] = {
     "entry_date": "2026-03-15",
     "description": "AWS, March",
     "lines": [
-        {"account": "6100", "debit": "120.50"},
-        {"account": "2110", "credit": "120.50"},
+        {"account": "6100", "amount": "120.50"},
+        {"account": "2110", "amount": "-120.50"},
     ],
     "reason": "Historical AWS transactions were classified to account 6100.",
     "evidence": ["vendor_id=42", "historical_account=6100"],
@@ -113,12 +113,11 @@ def test_read_tools_work(mcp_as: McpServers) -> None:
 def test_proposal_tools_work(mcp_as: McpServers) -> None:
     entry = mcp_as("agent")("propose_journal_entry", **PROPOSAL)
     assert entry["status"] == "PROPOSED"
-    assert [
-        (line["account"], line["debit"], line["credit"]) for line in entry["lines"]
-    ] == [
-        ("6100", "120.50", "0.00"),
-        ("2110", "0.00", "120.50"),
+    assert [(line["account"], line["amount"]) for line in entry["lines"]] == [
+        ("6100", "120.50"),
+        ("2110", "-120.50"),
     ]
+    assert entry["total"] == "0.00"
     assert mcp_as("reader")("get_journal_entry", entry_id=entry["id"]) == entry
 
     (audited,) = mcp_as("reader")(
@@ -137,8 +136,8 @@ def test_validation_tool_works(mcp_as: McpServers) -> None:
         **{
             **PROPOSAL,
             "lines": [
-                {"account": "6100", "debit": "120.50"},
-                {"account": "2110", "credit": "12.05"},
+                {"account": "6100", "amount": "120.50"},
+                {"account": "2110", "amount": "-12.05"},
             ],
         },
     )
@@ -178,7 +177,11 @@ def test_permission_checks_work(mcp_as: McpServers) -> None:
 
     reader = mcp_as("reader")
     trial = reader("get_trial_balance", as_of="2026-03-31")
-    assert (trial["total_debits"], trial["total_credits"]) == ("120.50", "120.50")
+    assert [(line["account_code"], line["balance"]) for line in trial["lines"]] == [
+        ("2110", "-120.50"),
+        ("6100", "120.50"),
+    ]
+    assert (trial["total"], trial["is_balanced"]) == ("0.00", True)
     income = reader("get_income_statement", start="2026-03-01", end="2026-03-31")
     assert income["net_income"] == "-120.50"
 

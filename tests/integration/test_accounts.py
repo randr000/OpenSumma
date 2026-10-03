@@ -352,8 +352,8 @@ def _spend(session: Session, account: str) -> JournalEntry:
         entry_date=date(2026, 3, 15),
         description="Spend",
         lines=[
-            LineInput(account, debit=Decimal("10.00")),
-            LineInput("1111", credit=Decimal("10.00")),
+            LineInput(account, Decimal("10.00")),
+            LineInput("1111", Decimal("-10.00")),
         ],
     )
 

@@ -74,6 +74,7 @@ def test_postgresql_sql_can_be_generated_offline() -> None:
     assert "CREATE TABLE audit_event" in sql
     assert "CREATE INDEX ix_audit_event_subject" in sql
     assert "CREATE TABLE api_key" in sql
+    assert "UPDATE journal_line SET amount" in sql
     assert sql.index("CREATE TABLE journal_entry") < sql.index(
         "CREATE TABLE accounting_object_entry"
     )
@@ -81,6 +82,8 @@ def test_postgresql_sql_can_be_generated_offline() -> None:
 
 PHASE_4 = "de5016324ad2"
 PHASE_5 = "71801d14980d"
+PHASE_7 = "dab3bc95c36e"
+SIGNED_AMOUNTS = "db546c4d06cf"
 
 
 def _check_constraints(engine: Engine, table: str) -> set[str]:
@@ -100,6 +103,9 @@ def test_rebuilding_a_table_keeps_its_check_constraints(
         "ck_accounting_object_object_type_is_valid",
         "ck_accounting_object_source_not_empty",
         "ck_accounting_object_status_is_valid",
+    }
+    assert _check_constraints(engine, "journal_line") == {
+        "ck_journal_line_line_number_positive"
     }
 
 
@@ -162,3 +168,105 @@ def test_entity_ids_become_counterparties_and_come_back(
     assert "ck_accounting_object_entity_id_not_empty" in _check_constraints(
         engine, "accounting_object"
     )
+
+
+def _insert_posted_entry(engine: Engine, lines: str) -> None:
+    """A posted entry with ``lines``, the VALUES of an INSERT into journal_line,
+    on accounts 1 and 2, and a dimension value for line 1."""
+    stamp = {"stamp": "2026-03-01 09:00:00+00:00", "yes": True}
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO account (id, code, name, account_type, normal_balance,"
+                " is_active, created_at, updated_at) VALUES"
+                " (1, '6100', 'Hosting', 'EXPENSE', 'DEBIT', :yes, :stamp, :stamp),"
+                " (2, '1111', 'Bank', 'ASSET', 'DEBIT', :yes, :stamp, :stamp)"
+            ),
+            stamp,
+        )
+        connection.execute(
+            text(
+                "INSERT INTO dimension (id, code, name, created_at, updated_at)"
+                " VALUES (1, 'DEPARTMENT', 'Department', :stamp, :stamp)"
+            ),
+            stamp,
+        )
+        connection.execute(
+            text(
+                "INSERT INTO dimension_value (id, dimension_id, code, name, is_active,"
+                " created_at, updated_at)"
+                " VALUES (1, 1, 'ENG', 'Engineering', :yes, :stamp, :stamp)"
+            ),
+            stamp,
+        )
+        connection.execute(
+            text(
+                "INSERT INTO journal_entry (id, entry_date, description, status,"
+                " posted_at, created_at, updated_at)"
+                " VALUES (1, '2026-03-02', 'AWS', 'POSTED', :stamp, :stamp, :stamp)"
+            ),
+            stamp,
+        )
+        connection.execute(text(f"INSERT INTO journal_line {lines}"))
+        connection.execute(
+            text(
+                "INSERT INTO journal_line_dimension"
+                " (journal_line_id, dimension_id, dimension_value_id)"
+                " VALUES (1, 1, 1)"
+            )
+        )
+
+
+def test_debits_and_credits_become_signed_amounts_and_come_back(
+    cli_config: Config, engine: Engine
+) -> None:
+    command.upgrade(cli_config, PHASE_7)
+    _insert_posted_entry(
+        engine,
+        "(id, journal_entry_id, line_number, account_id, debit, credit, memo)"
+        " VALUES (1, 1, 1, 1, 12050, 0, 'compute'), (2, 1, 2, 2, 0, 12050, NULL)",
+    )
+
+    command.upgrade(cli_config, SIGNED_AMOUNTS)
+    with engine.connect() as connection:
+        upgraded = connection.execute(
+            text("SELECT id, amount, memo FROM journal_line ORDER BY id")
+        ).all()
+        tagged = connection.execute(
+            text("SELECT journal_line_id FROM journal_line_dimension")
+        ).all()
+    assert upgraded == [(1, 12050, "compute"), (2, -12050, None)]
+    assert tagged == [(1,)]  # rebuilding the table keeps what refers to its rows
+    assert _check_constraints(engine, "journal_line") == {
+        "ck_journal_line_line_number_positive"
+    }
+
+    command.downgrade(cli_config, PHASE_7)
+    with engine.connect() as connection:
+        restored = connection.execute(
+            text("SELECT id, debit, credit, memo FROM journal_line ORDER BY id")
+        ).all()
+    assert restored == [(1, 12050, 0, "compute"), (2, 0, 12050, None)]
+    assert "ck_journal_line_one_positive_side" in _check_constraints(
+        engine, "journal_line"
+    )
+
+
+def test_a_zero_line_keeps_the_books_from_going_back_to_debits_and_credits(
+    cli_config: Config, engine: Engine
+) -> None:
+    command.upgrade(cli_config, SIGNED_AMOUNTS)
+    _insert_posted_entry(
+        engine,
+        "(id, journal_entry_id, line_number, account_id, amount, memo)"
+        " VALUES (1, 1, 1, 1, 0, NULL), (2, 1, 2, 2, 0, NULL)",
+    )
+
+    with pytest.raises(RuntimeError, match="zero amount"):
+        command.downgrade(cli_config, PHASE_7)
+    assert current_revision(engine) == SIGNED_AMOUNTS
+    with engine.connect() as connection:
+        kept = connection.execute(
+            text("SELECT id, amount FROM journal_line ORDER BY id")
+        ).all()
+    assert kept == [(1, 0), (2, 0)]

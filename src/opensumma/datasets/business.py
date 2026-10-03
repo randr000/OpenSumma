@@ -272,13 +272,13 @@ class _Planner:
             date(self.year, 1, 1),
             f"Opening balances at 1 January {self.year}",
             [
-                Line(OPERATING_ACCOUNT, debit=money(cash)),
-                Line("1140", debit=money(inventory)),
-                Line("1510", debit=money(equipment)),
-                Line("1590", credit=money(depreciated)),
-                Line("3100", credit=money(stock)),
-                Line("3200", credit=money(paid_in)),
-                Line("3900", credit=money(retained)),
+                Line(OPERATING_ACCOUNT, money(cash)),
+                Line("1140", money(inventory)),
+                Line("1510", money(equipment)),
+                Line("1590", -money(depreciated)),
+                Line("3100", -money(stock)),
+                Line("3200", -money(paid_in)),
+                Line("3900", -money(retained)),
             ],
             number=0,  # recorded first, though planned once sales are known
         )
@@ -339,16 +339,16 @@ class _Planner:
             self.cogs[day.month] += cost
             product_dims = dims(CLASS="PRODUCT", LOCATION=location)
             lines = [
-                Line(AR, debit=money(amount)),
+                Line(AR, money(amount)),
                 Line(
                     "4100",
-                    credit=money(amount),
+                    -money(amount),
                     dimensions=dims(
                         CLASS="PRODUCT", DEPARTMENT="SALES", LOCATION=location
                     ),
                 ),
-                Line("5100", debit=money(cost), dimensions=product_dims),
-                Line("1140", credit=money(cost)),
+                Line("5100", money(cost), dimensions=product_dims),
+                Line("1140", -money(cost)),
             ]
             line_class, description = "PRODUCT", f"{quantity} x {product.name}"
             quantity_text, unit_price = str(quantity), text(product.price)
@@ -360,10 +360,10 @@ class _Planner:
             amount = half_hours * service.rate // 2
             hours = f"{half_hours // 2}" + (".5" if half_hours % 2 else "")
             lines = [
-                Line(AR, debit=money(amount)),
+                Line(AR, money(amount)),
                 Line(
                     "4200",
-                    credit=money(amount),
+                    -money(amount),
                     dimensions=dims(
                         CLASS="SERVICES", DEPARTMENT="SALES", LOCATION=location
                     ),
@@ -405,7 +405,7 @@ class _Planner:
     ) -> None:
         assert invoice.document is not None
         invoice_number = invoice.document.data["invoice_number"]
-        amount = cents(invoice.lines[0].debit)  # the receivable
+        amount = cents(invoice.lines[0].amount)  # the receivable
         method = rng.weighted(("ACH", "check", "wire"), (6, 3, 1))
         number = len(self.transactions) + 1
         statement = {
@@ -418,8 +418,8 @@ class _Planner:
             day,
             f"Payment received - {customer.name} - {invoice_number}",
             [
-                Line(OPERATING_ACCOUNT, debit=money(amount)),
-                Line(AR, credit=money(amount)),
+                Line(OPERATING_ACCOUNT, money(amount)),
+                Line(AR, -money(amount)),
             ],
             document=Document(
                 object_type=AccountingObjectType.CUSTOMER_PAYMENT,
@@ -446,7 +446,7 @@ class _Planner:
         data = invoice.document.data
         day = next_business_day(paid_on + timedelta(days=rng.integer(5, 40)))
         amount = max(
-            cents(invoice.lines[0].debit) * rng.choice((5, 10, 15, 20, 25)) // 100, 1
+            cents(invoice.lines[0].amount) * rng.choice((5, 10, 15, 20, 25)) // 100, 1
         )
         number = len(self.transactions) + 1
         line_dims = dims(
@@ -457,8 +457,8 @@ class _Planner:
             day,
             f"Refund - {customer.name} - {data['invoice_number']}",
             [
-                Line("4900", debit=money(amount), dimensions=line_dims),
-                Line(OPERATING_ACCOUNT, credit=money(amount)),
+                Line("4900", money(amount), dimensions=line_dims),
+                Line(OPERATING_ACCOUNT, -money(amount)),
             ],
             document=Document(
                 object_type=AccountingObjectType.CUSTOMER_PAYMENT,
@@ -543,10 +543,10 @@ class _Planner:
                 lines = [
                     Line(
                         "5100",
-                        debit=money(amount),
+                        money(amount),
                         dimensions=dims(CLASS="PRODUCT", LOCATION="HQ"),
                     ),
-                    Line("1140", credit=money(amount)),
+                    Line("1140", -money(amount)),
                 ]
                 adjustment, description = (
                     "inventory_count",
@@ -559,12 +559,12 @@ class _Planner:
                 lines = [
                     Line(
                         "6500",
-                        debit=money(amount),
+                        money(amount),
                         dimensions=dims(DEPARTMENT=target, LOCATION="HQ"),
                     ),
                     Line(
                         "6500",
-                        credit=money(amount),
+                        -money(amount),
                         dimensions=dims(DEPARTMENT=source, LOCATION="HQ"),
                     ),
                 ]
@@ -612,10 +612,10 @@ class _Planner:
             [
                 Line(
                     merchant.account,
-                    debit=money(amount),
+                    money(amount),
                     dimensions=dims(DEPARTMENT=department, LOCATION=location),
                 ),
-                Line(OPERATING_ACCOUNT, credit=money(amount)),
+                Line(OPERATING_ACCOUNT, -money(amount)),
             ],
             document=Document(
                 object_type=AccountingObjectType.EXPENSE,
@@ -675,8 +675,8 @@ class _Planner:
             day,
             f"{vendor.name} - bill {invoice_number}",
             [
-                Line(vendor.account, debit=money(amount), dimensions=cost_dims),
-                Line(AP, credit=money(amount)),
+                Line(vendor.account, money(amount), dimensions=cost_dims),
+                Line(AP, -money(amount)),
             ],
             document=Document(
                 object_type=AccountingObjectType.VENDOR_BILL,
@@ -699,8 +699,8 @@ class _Planner:
             day,
             f"Payment - {vendor.name} - {invoice_number}",
             [
-                Line(AP, debit=money(amount)),
-                Line(OPERATING_ACCOUNT, credit=money(amount)),
+                Line(AP, money(amount)),
+                Line(OPERATING_ACCOUNT, -money(amount)),
             ],
             document=Document(
                 object_type=AccountingObjectType.VENDOR_PAYMENT,
@@ -822,10 +822,10 @@ class _Planner:
                 [
                     Line(
                         "6800",
-                        debit=money(amortized),
+                        money(amortized),
                         dimensions=dims(DEPARTMENT="GA", LOCATION="HQ"),
                     ),
-                    Line("1130", credit=money(amortized)),
+                    Line("1130", -money(amortized)),
                 ],
             )
             self._legal(rng, month)
@@ -844,8 +844,8 @@ class _Planner:
                     due,
                     f"Payroll tax remittance - {month_name(self.year, month - 1)}",
                     [
-                        Line("2130", debit=money(remitted[month - 1])),
-                        Line(OPERATING_ACCOUNT, credit=money(remitted[month - 1])),
+                        Line("2130", money(remitted[month - 1])),
+                        Line(OPERATING_ACCOUNT, -money(remitted[month - 1])),
                     ],
                     -remitted[month - 1],
                     "EFTPS TAX PAYMENT",
@@ -860,10 +860,10 @@ class _Planner:
                 [
                     Line(
                         "6600",
-                        debit=money(depreciation),
+                        money(depreciation),
                         dimensions=dims(DEPARTMENT="GA", LOCATION="HQ"),
                     ),
-                    Line("1590", credit=money(depreciation)),
+                    Line("1590", -money(depreciation)),
                 ],
             )
 
@@ -908,8 +908,8 @@ class _Planner:
             last,
             f"Accrued legal fees - {name}",
             [
-                Line(cast.LEGAL.account, debit=money(estimate), dimensions=cost_dims),
-                Line("2120", credit=money(estimate)),
+                Line(cast.LEGAL.account, money(estimate), dimensions=cost_dims),
+                Line("2120", -money(estimate)),
             ],
             document=Document(
                 object_type=AccountingObjectType.JOURNAL_ENTRY,
@@ -932,12 +932,7 @@ class _Planner:
             first,
             f"Reversal of accrued legal fees - {name}",
             [
-                Line(
-                    line.account,
-                    debit=line.credit,
-                    credit=line.debit,
-                    dimensions=line.dimensions,
-                )
+                Line(line.account, -line.amount, dimensions=line.dimensions)
                 for line in accrual.lines
             ],
             reverses=accrual.key,
@@ -966,21 +961,21 @@ class _Planner:
             taxes = gross * _EMPLOYER_TAX // 10_000
             withheld = gross * _WITHHOLDING // 10_000
             cost_dims = dims(DEPARTMENT=department, LOCATION="HQ")
-            lines.append(Line("6300", debit=money(gross), dimensions=cost_dims))
-            lines.append(Line("6310", debit=money(taxes), dimensions=cost_dims))
+            lines.append(Line("6300", money(gross), dimensions=cost_dims))
+            lines.append(Line("6310", money(taxes), dimensions=cost_dims))
             gross_total += gross
             withheld_total += withheld
             taxes_total += taxes
         net = gross_total - withheld_total
         owed = withheld_total + taxes_total
-        lines += [Line("1112", credit=money(net)), Line("2130", credit=money(owed))]
+        lines += [Line("1112", -money(net)), Line("2130", -money(owed))]
         self._bank_document(
             "payroll_funding",
             previous_business_day(pay_day - timedelta(days=1)),
             f"Fund payroll account - {pay_day.isoformat()}",
             [
-                Line("1112", debit=money(net)),
-                Line(OPERATING_ACCOUNT, credit=money(net)),
+                Line("1112", money(net)),
+                Line(OPERATING_ACCOUNT, -money(net)),
             ],
             -net,
             "TRANSFER TO PAYROLL ****2291",
@@ -1046,10 +1041,10 @@ class _Planner:
                 [
                     Line(
                         "6900",
-                        debit=money(fee),
+                        money(fee),
                         dimensions=dims(DEPARTMENT="GA", LOCATION="HQ"),
                     ),
-                    Line(OPERATING_ACCOUNT, credit=money(fee)),
+                    Line(OPERATING_ACCOUNT, -money(fee)),
                 ],
                 -fee,
                 "ACCOUNT ANALYSIS FEE",

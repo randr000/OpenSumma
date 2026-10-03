@@ -84,8 +84,8 @@ def _entry(session: Session, day: date = date(2026, 1, 10)) -> JournalEntry:
         entry_date=day,
         description="Office supplies",
         lines=[
-            LineInput("6700", debit=Decimal("45.00")),
-            LineInput("2110", credit=Decimal("45.00")),
+            LineInput("6700", Decimal("45.00")),
+            LineInput("2110", Decimal("-45.00")),
         ],
     )
 

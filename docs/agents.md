@@ -93,8 +93,9 @@ one merchant do not.
 
 For a bill (JE-001) it learns how the company records that vendor's bills from the
 books, not from a table of its own: it reads the vendor's latest posted bills, up
-to ten, and takes the way most of them were recorded, the account debited, the
-account credited, and the tags each line carries. The bill gives the amount, the
+to ten, and takes the way most of them were recorded, the account debited (the
+line with a positive amount), the account credited (the line with a negative one),
+and the tags each line carries. The bill gives the amount, the
 date, and each tag's value, from its field of the same name. It proposes the entry
 linked to the bill, with the precedent entries as evidence; validates it; and
 submits it for approval only if it is valid:

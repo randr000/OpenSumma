@@ -36,8 +36,8 @@ def _record(session: Session, description: str = "Rent") -> JournalEntry:
         entry_date=MARCH,
         description=description,
         lines=[
-            LineInput("6200", debit=Decimal("2500.00"), dimensions={"LOCATION": "HQ"}),
-            LineInput("1111", credit=Decimal("2500.00")),
+            LineInput("6200", Decimal("2500.00"), dimensions={"LOCATION": "HQ"}),
+            LineInput("1111", Decimal("-2500.00")),
         ],
     )
 
@@ -60,7 +60,7 @@ def _set(attribute: str, value: object) -> Tamper:
 def _add_line(session: Session, entry: JournalEntry) -> None:
     entry.lines.append(
         JournalLine(
-            line_number=3, account=get_account(session, "6100"), debit=Decimal("1.00")
+            line_number=3, account=get_account(session, "6100"), amount=Decimal("1.00")
         )
     )
 
@@ -90,7 +90,7 @@ TAMPERING: dict[str, Tamper] = {
     "posted_at": _set("posted_at", utcnow()),
     "back to draft": _set("status", JournalEntryStatus.DRAFT),
     "voided": _set("status", JournalEntryStatus.VOIDED),
-    "line amount": lambda s, e: setattr(e.lines[0], "debit", Decimal("2400.00")),
+    "line amount": lambda s, e: setattr(e.lines[0], "amount", Decimal("2400.00")),
     "line account": lambda s, e: setattr(e.lines[0], "account", get_account(s, "6100")),
     "line memo": lambda s, e: setattr(e.lines[0], "memo", "backdated"),
     "extra line": _add_line,
@@ -117,12 +117,12 @@ def test_a_posted_entry_cannot_be_changed(
 def test_nothing_reaches_the_database_when_a_change_is_refused(
     books: Session, posted: JournalEntry
 ) -> None:
-    posted.lines[0].debit = Decimal("1.00")
+    posted.lines[0].amount = Decimal("1.00")
     with pytest.raises(ImmutableEntryError):
         books.commit()
     books.rollback()
 
-    assert posted.lines[0].debit == Decimal("2500.00")
+    assert posted.lines[0].amount == Decimal("2500.00")
     assert posted.status is JournalEntryStatus.POSTED
 
 
@@ -167,7 +167,7 @@ def test_a_line_cannot_be_moved_into_a_posted_entry(
         update(JournalEntry).values(description="x"),
         delete(JournalLineDimension),
         insert(JournalLine).values(
-            journal_entry_id=1, line_number=3, account_id=1, debit=1, credit=0
+            journal_entry_id=1, line_number=3, account_id=1, amount=1
         ),
     ],
     ids=["update lines", "update entries", "delete dimensions", "insert a line"],
@@ -184,13 +184,16 @@ def test_drafts_remain_editable(books: Session) -> None:
     books.commit()
 
     draft.description = "Rent, corrected"
-    draft.lines[0].debit = Decimal("2400.00")
-    draft.lines[1].credit = Decimal("2400.00")
+    draft.lines[0].amount = Decimal("2400.00")
+    draft.lines[1].amount = Decimal("-2400.00")
     draft.lines[0].dimensions.clear()
     books.commit()
 
     assert draft.description == "Rent, corrected"
-    assert draft.total_debits == Decimal("2400.00")
+    assert [line.amount for line in draft.lines] == [
+        Decimal("2400.00"),
+        Decimal("-2400.00"),
+    ]
 
 
 def test_an_unbalanced_entry_cannot_be_written_straight_into_the_ledger(
@@ -207,24 +210,24 @@ def test_an_unbalanced_entry_cannot_be_written_straight_into_the_ledger(
                 JournalLine(
                     line_number=1,
                     account=get_account(books, "6100"),
-                    debit=Decimal("100.00"),
+                    amount=Decimal("100.00"),
                 ),
                 JournalLine(
                     line_number=2,
                     account=get_account(books, "1111"),
-                    credit=Decimal("1.00"),
+                    amount=Decimal("-1.00"),
                 ),
             ],
         )
     )
 
-    with pytest.raises(JournalEntryError, match=r"debits total 100\.00"):
+    with pytest.raises(JournalEntryError, match=r"sum to 99\.00 rather than zero"):
         books.flush()
 
 
 def test_a_draft_cannot_be_flipped_into_the_ledger_unbalanced(books: Session) -> None:
     draft = _record(books)
-    draft.lines[0].debit = Decimal("1.00")
+    draft.lines[0].amount = Decimal("1.00")
     books.commit()
 
     draft.status = JournalEntryStatus.POSTED
@@ -241,7 +244,7 @@ def test_a_draft_cannot_be_flipped_into_the_ledger_unbalanced(books: Session) ->
     [
         _set("description", "Rent, adjusted"),
         _set("entry_date", date(2026, 3, 1)),
-        lambda s, e: setattr(e.lines[0], "debit", Decimal("2400.00")),
+        lambda s, e: setattr(e.lines[0], "amount", Decimal("2400.00")),
         _add_line,
         _swap_dimension,
         lambda s, e: s.delete(e.lines[0]),

@@ -118,12 +118,7 @@ class _Recorder:
             )
         else:
             lines = [
-                LineInput(
-                    line.account,
-                    debit=line.debit,
-                    credit=line.credit,
-                    dimensions=dict(line.dimensions),
-                )
+                LineInput(line.account, line.amount, dimensions=dict(line.dimensions))
                 for line in transaction.lines
             ]
             if document is None:

@@ -38,10 +38,8 @@ def _post_directly(url: str) -> int:
             entry_date=date(2026, 3, 3),
             description="Stratus INV-88",
             lines=[
-                LineInput(
-                    "5200", debit=Decimal("310.00"), dimensions={"DEPARTMENT": "ENG"}
-                ),
-                LineInput("2110", credit=Decimal("310.00")),
+                LineInput("5200", Decimal("310.00"), dimensions={"DEPARTMENT": "ENG"}),
+                LineInput("2110", Decimal("-310.00")),
             ],
         )
         kernel.post_journal_entry(session, entry)
@@ -151,9 +149,7 @@ def test_an_account_balance(api: TestClient, api_url: str, auth: Auth) -> None:
         "account_type": "LIABILITY",
         "normal_balance": "CREDIT",
         "as_of": None,
-        "debits": "0.00",
-        "credits": "310.00",
-        "balance": "310.00",
+        "balance": "-310.00",
     }
     earlier = api.get(
         "/accounts/2000/balance", params={"as_of": "2026-03-02"}, headers=auth("reader")
@@ -200,15 +196,15 @@ def test_a_journal_entry(api: TestClient, api_url: str, auth: Auth) -> None:
 
     assert entry["status"] == "POSTED"
     assert entry["posted_at"] is not None
-    assert (entry["total_debits"], entry["total_credits"]) == ("310.00", "310.00")
+    assert entry["total"] == "0.00"
     assert entry["lines"][0] == {
         "line_number": 1,
         "account": "5200",
-        "debit": "310.00",
-        "credit": "0.00",
+        "amount": "310.00",
         "memo": None,
         "dimensions": {"DEPARTMENT": "ENG"},
     }
+    assert entry["lines"][1]["amount"] == "-310.00"
     assert entry["accounting_object_ids"] == [1]
 
     missing = api.get("/journal-entries/999", headers=auth("reader"))
@@ -221,11 +217,9 @@ def test_a_journal_entry(api: TestClient, api_url: str, auth: Auth) -> None:
 def test_the_ledger(api: TestClient, api_url: str, auth: Auth) -> None:
     _post_directly(api_url)
     lines = api.get("/ledger", headers=auth("reader")).json()
-    assert [
-        (line["account_code"], line["debit"], line["credit"]) for line in lines
-    ] == [
-        ("5200", "310.00", "0.00"),
-        ("2110", "0.00", "310.00"),
+    assert [(line["account_code"], line["amount"]) for line in lines] == [
+        ("5200", "310.00"),
+        ("2110", "-310.00"),
     ]
     only = api.get(
         "/ledger", params={"account": ["2110", "1111"]}, headers=auth("reader")
@@ -249,7 +243,11 @@ def test_the_reports(api: TestClient, api_url: str, auth: Auth) -> None:
         return api.get(path, params=params, headers=auth("reader")).json()
 
     trial = get("/reports/trial-balance", as_of="2026-03-31")
-    assert (trial["total_debits"], trial["is_balanced"]) == ("310.00", True)
+    assert [(line["account_code"], line["balance"]) for line in trial["lines"]] == [
+        ("2110", "-310.00"),
+        ("5200", "310.00"),
+    ]
+    assert (trial["total"], trial["is_balanced"]) == ("0.00", True)
 
     income = get("/reports/income-statement", start="2026-03-01", end="2026-03-31")
     assert income["net_income"] == "-310.00"
@@ -272,8 +270,11 @@ def test_the_reports(api: TestClient, api_url: str, auth: Auth) -> None:
     (payable,) = ledger["accounts"]
     assert (payable["opening_balance"], payable["closing_balance"]) == (
         "0.00",
-        "310.00",
+        "-310.00",
     )
+    assert [(line["amount"], line["balance"]) for line in payable["lines"]] == [
+        ("-310.00", "-310.00")
+    ]
 
 
 def test_report_dates_are_required_and_checked(api: TestClient, auth: Auth) -> None:

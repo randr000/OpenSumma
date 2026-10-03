@@ -6,48 +6,40 @@ from decimal import Decimal
 import pytest
 
 from opensumma.kernel.enums import AccountType, NormalBalance
-from opensumma.kernel.ledger import Activity
-from opensumma.kernel.reports import BalanceSheet, StatementSection, TrialBalance
+from opensumma.kernel.reports import (
+    BalanceSheet,
+    StatementSection,
+    TrialBalance,
+    _in_direction,
+)
 
 
 @pytest.mark.parametrize(
-    ("debits", "credits", "debit_side", "credit_side"),
+    ("amount", "debit_side", "credit_side"),
     [
-        ("100.00", "40.00", "60.00", "-60.00"),
-        ("40.00", "100.00", "-60.00", "60.00"),
-        ("0.00", "0.00", "0.00", "0.00"),
-        ("25.00", "25.00", "0.00", "0.00"),
+        ("60.00", "60.00", "-60.00"),
+        ("-60.00", "-60.00", "60.00"),
+        ("0.00", "0.00", "0.00"),
     ],
 )
-def test_a_balance_is_stated_on_the_side_asked_for(
-    debits: str, credits: str, debit_side: str, credit_side: str
+def test_a_statement_states_a_signed_amount_on_its_sections_side(
+    amount: str, debit_side: str, credit_side: str
 ) -> None:
-    activity = Activity(Decimal(debits), Decimal(credits))
-
-    assert activity.balance(NormalBalance.DEBIT) == Decimal(debit_side)
-    assert activity.balance(NormalBalance.CREDIT) == Decimal(credit_side)
+    assert _in_direction(Decimal(amount), NormalBalance.DEBIT) == Decimal(debit_side)
+    assert _in_direction(Decimal(amount), NormalBalance.CREDIT) == Decimal(credit_side)
 
 
-def test_a_zero_balance_never_prints_as_negative_zero() -> None:
-    assert str(Activity().balance(NormalBalance.CREDIT)) == "0.00"
-    assert str(
-        Activity(Decimal("5.00"), Decimal("5.00")).balance(NormalBalance.DEBIT)
-    ) == ("0.00")
+def test_a_zero_amount_never_prints_as_negative_zero() -> None:
+    assert str(_in_direction(Decimal("0.00"), NormalBalance.CREDIT)) == "0.00"
 
 
-def test_activity_adds_up_side_by_side() -> None:
-    total = Activity(Decimal("1.10"), Decimal("0.00")) + Activity(
-        Decimal("0.00"), Decimal("2.20")
-    )
-    assert total == Activity(Decimal("1.10"), Decimal("2.20"))
+def test_a_trial_balance_is_balanced_when_its_balances_sum_to_zero() -> None:
+    def trial(total: str) -> TrialBalance:
+        return TrialBalance(date(2026, 1, 31), (), Decimal(total))
 
-
-def test_a_trial_balance_is_balanced_when_its_columns_agree() -> None:
-    def trial(debits: str, credits: str) -> TrialBalance:
-        return TrialBalance(date(2026, 1, 31), (), Decimal(debits), Decimal(credits))
-
-    assert trial("10.00", "10.00").is_balanced
-    assert not trial("10.00", "9.99").is_balanced
+    assert trial("0.00").is_balanced
+    assert not trial("0.01").is_balanced
+    assert not trial("-0.01").is_balanced
 
 
 def test_a_balance_sheet_balances_when_assets_equal_liabilities_and_equity() -> None:

@@ -75,8 +75,8 @@ def month(database_url: str, engine: Engine) -> Iterator[Month]:
             entry_date=date(2026, 3, 1),
             description="Owner investment",
             lines=[
-                LineInput("1111", debit=Decimal("10000.00")),
-                LineInput("3100", credit=Decimal("10000.00")),
+                LineInput("1111", Decimal("10000.00")),
+                LineInput("3100", Decimal("-10000.00")),
             ],
         )
         kernel.post_journal_entry(session, capital)
@@ -97,8 +97,8 @@ def month(database_url: str, engine: Engine) -> Iterator[Month]:
             entry_date=date(2026, 3, 15),
             description="AWS, March",
             lines=[
-                LineInput("6100", debit=Decimal("120.50")),
-                LineInput("2110", credit=Decimal("120.50")),
+                LineInput("6100", Decimal("120.50")),
+                LineInput("2110", Decimal("-120.50")),
             ],
             reason=REASON,
             evidence=EVIDENCE,
@@ -123,7 +123,7 @@ def test_audit_events_exist(month: Month) -> None:
     assert event.action == "propose_journal_entry"
     assert (event.object_type, event.object_id) == ("journal_entry", month.proposal.id)
     assert event.input["description"] == "AWS, March"
-    assert event.input["lines"][0]["debit"] == "120.50"
+    assert event.input["lines"][0]["amount"] == "120.50"
     assert event.output == {"status": "PROPOSED"}
     assert event.result is AuditResult.SUCCEEDED
     assert event.evidence == EVIDENCE

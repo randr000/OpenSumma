@@ -67,9 +67,9 @@ def _session(directory: Path) -> Iterator[Session]:
 
 def _net(session: Session, through: date) -> dict[str, Decimal]:
     return {
-        account: activity.debits - activity.credits
-        for account, activity in posted_activity(session, end=through).items()
-        if activity.debits != activity.credits
+        account: net
+        for account, net in posted_activity(session, end=through).items()
+        if net != ZERO
     }
 
 
@@ -159,12 +159,17 @@ def test_a_1000_transaction_dataset_works(acme: Generated, tmp_path: Path) -> No
         session.commit()
     with TestClient(create_app(url)) as api:
         assert api.get("/health").json() == {"status": "ok"}
-        trial = api.get(
-            "/reports/trial-balance",
-            params={"as_of": "2026-12-31"},
-            headers={"Authorization": f"Bearer {key}"},
-        ).json()
-    assert trial["total_debits"] == manifest["year_end"]["trial_balance_total"]
+
+        def report(path: str) -> Any:
+            return api.get(
+                f"/reports/{path}",
+                params={"as_of": "2026-12-31"},
+                headers={"Authorization": f"Bearer {key}"},
+            ).json()
+
+        trial, sheet = report("trial-balance"), report("balance-sheet")
+    assert (trial["total"], trial["is_balanced"]) == ("0.00", True)
+    assert sheet["assets"]["total"] == manifest["year_end"]["total_assets"]
 
 
 def test_a_10000_transaction_dataset_works(large: Generated) -> None:
@@ -208,11 +213,9 @@ def test_error_injection_works(acme: Generated) -> None:
                 assert entry is not None, error["id"]
                 assert entry.entry_date.isoformat() == recorded["entry_date"]
                 assert [
-                    (line.account.code, str(line.debit), str(line.credit))
-                    for line in entry.lines
+                    (line.account.code, str(line.amount)) for line in entry.lines
                 ] == [
-                    (line["account"], line["debit"], line["credit"])
-                    for line in recorded["lines"]
+                    (line["account"], line["amount"]) for line in recorded["lines"]
                 ], error["id"]
 
 
@@ -236,7 +239,7 @@ def test_ground_truth_is_preserved(acme: Generated, tmp_path: Path) -> None:
                         if date.fromisoformat(entry["entry_date"]) > end:
                             continue
                         for line in entry["lines"]:
-                            net = Decimal(line["debit"]) - Decimal(line["credit"])
+                            net = Decimal(line["amount"])
                             explained[line["account"]] = (
                                 explained.get(line["account"], ZERO) + sign * net
                             )
@@ -249,7 +252,7 @@ def test_the_ground_truth_is_enough_to_correct_the_books(
     directory, _, ground_truth = acme
     (error,) = [e for e in ground_truth["errors"] if e["type"] == "wrong_gl_account"]
     details = error["details"]
-    amount = Decimal(error["actual"][0]["lines"][0]["debit"])
+    amount = Decimal(error["actual"][0]["lines"][0]["amount"])
     dimensions = error["actual"][0]["lines"][0]["dimensions"]
 
     shutil.copyfile(directory / "books.db", tmp_path / "books.db")
@@ -264,12 +267,8 @@ def test_the_ground_truth_is_enough_to_correct_the_books(
             entry_date=date(2026, 12, 31),
             description=f"Reclassify journal entry {details['journal_entry_id']}",
             lines=[
-                LineInput(
-                    details["correct_account"], debit=amount, dimensions=dimensions
-                ),
-                LineInput(
-                    details["posted_account"], credit=amount, dimensions=dimensions
-                ),
+                LineInput(details["correct_account"], amount, dimensions=dimensions),
+                LineInput(details["posted_account"], -amount, dimensions=dimensions),
             ],
             reason="The expense was posted to the wrong account.",
             evidence=[f"journal_entry_id={details['journal_entry_id']}"],

@@ -10,12 +10,13 @@ the report.
 
 Sign conventions:
 
-- The trial balance puts each account's net balance in the debit or the credit
-  column, whichever side it falls on.
-- The general ledger states running balances in each account's normal direction.
-- A financial statement states each amount in its section's normal direction, so a
-  contra account shows as negative within its section: accumulated depreciation
-  reduces assets, sales returns reduce revenue.
+- The trial balance and the general ledger are signed as the ledger is: a debit,
+  or a debit balance, is positive, and a credit, or a credit balance, negative. The
+  trial balance's balances therefore sum to zero.
+- A financial statement states each amount in its section's normal direction, so
+  revenue, liabilities, and equity read as positive, and a contra account shows as
+  negative within its section: accumulated depreciation reduces assets, sales
+  returns reduce revenue.
 """
 
 from collections import defaultdict
@@ -28,7 +29,6 @@ from sqlalchemy.orm import Session
 from opensumma.kernel.accounts import chart_of_accounts, descendants, get_account
 from opensumma.kernel.enums import AccountType, NormalBalance
 from opensumma.kernel.ledger import (
-    Activity,
     LedgerLine,
     activity_before,
     ledger_lines,
@@ -41,27 +41,26 @@ from opensumma.utc import ensure_date
 
 @dataclass(frozen=True)
 class TrialBalanceLine:
-    """One account's net balance, in the debit column or the credit column."""
+    """One account's balance: positive for a debit balance, negative for a credit."""
 
     account_code: str
     account_name: str
     account_type: AccountType
-    debit: Decimal
-    credit: Decimal
+    balance: Decimal
 
 
 @dataclass(frozen=True)
 class TrialBalance:
-    """Every account with a balance on ``as_of``, and the column totals."""
+    """Every account with a balance on ``as_of``, and the total of the balances,
+    which is zero whenever the ledger is intact."""
 
     as_of: date
     lines: tuple[TrialBalanceLine, ...]
-    total_debits: Decimal
-    total_credits: Decimal
+    total: Decimal
 
     @property
     def is_balanced(self) -> bool:
-        return self.total_debits == self.total_credits
+        return self.total == ZERO
 
 
 @dataclass(frozen=True)
@@ -73,8 +72,7 @@ class GeneralLedgerLine:
     line_number: int
     description: str
     memo: str | None
-    debit: Decimal
-    credit: Decimal
+    amount: Decimal
     dimensions: tuple[tuple[str, str], ...]
     balance: Decimal
 
@@ -83,7 +81,8 @@ class GeneralLedgerLine:
 class GeneralLedgerAccount:
     """One account's lines over a date range, between its opening and closing balance.
 
-    Balances are stated in the account's normal direction.
+    Balances are signed like the lines: positive for a debit balance, negative for
+    a credit balance.
     """
 
     account_code: str
@@ -163,16 +162,16 @@ class BalanceSheet:
 
 
 def trial_balance(session: Session, *, as_of: date) -> TrialBalance:
-    """Each account's balance on ``as_of`` in the column it falls in.
+    """Each account's balance on ``as_of``, debit balances positive and credit
+    balances negative.
 
-    Accounts whose debits and credits cancel out are left off.
+    Accounts whose amounts cancel out are left off.
     """
     ensure_date(as_of)
     names = _accounts_by_code(session)
     lines = []
-    for code, activity in sorted(posted_activity(session, end=as_of).items()):
-        net = activity.balance(NormalBalance.DEBIT)
-        if net == ZERO:
+    for code, balance in sorted(posted_activity(session, end=as_of).items()):
+        if balance == ZERO:
             continue
         account = names[code]
         lines.append(
@@ -180,15 +179,13 @@ def trial_balance(session: Session, *, as_of: date) -> TrialBalance:
                 account_code=code,
                 account_name=account.name,
                 account_type=account.account_type,
-                debit=net if net > ZERO else ZERO,
-                credit=activity.balance(NormalBalance.CREDIT) if net < ZERO else ZERO,
+                balance=balance,
             )
         )
     return TrialBalance(
         as_of=as_of,
         lines=tuple(lines),
-        total_debits=sum((line.debit for line in lines), ZERO),
-        total_credits=sum((line.credit for line in lines), ZERO),
+        total=sum((line.balance for line in lines), ZERO),
     )
 
 
@@ -208,11 +205,7 @@ def general_ledger(
         opening = activity_before(session, start)
         codes = sorted(
             {line.account_code for line in lines}
-            | {
-                code
-                for code, brought in opening.items()
-                if brought.debits != brought.credits
-            }
+            | {code for code, brought in opening.items() if brought != ZERO}
         )
     else:
         requested = get_account(session, account_code)
@@ -232,12 +225,11 @@ def general_ledger(
     accounts = []
     for code in codes:
         account = by_code[code]
-        normal = account.normal_balance
-        opening_balance = opening.get(code, Activity()).balance(normal)
+        opening_balance = opening.get(code, ZERO)
         balance = opening_balance
         entries = []
         for line in lines_by_code[code]:
-            balance += Activity(line.debit, line.credit).balance(normal)
+            balance += line.amount
             entries.append(
                 GeneralLedgerLine(
                     entry_id=line.entry_id,
@@ -245,8 +237,7 @@ def general_ledger(
                     line_number=line.line_number,
                     description=line.description,
                     memo=line.memo,
-                    debit=line.debit,
-                    credit=line.credit,
+                    amount=line.amount,
                     dimensions=line.dimensions,
                     balance=balance,
                 )
@@ -255,7 +246,7 @@ def general_ledger(
             GeneralLedgerAccount(
                 account_code=code,
                 account_name=account.name,
-                normal_balance=normal,
+                normal_balance=account.normal_balance,
                 opening_balance=opening_balance,
                 lines=tuple(entries),
                 closing_balance=balance,
@@ -305,30 +296,31 @@ def balance_sheet(session: Session, *, as_of: date) -> BalanceSheet:
 
 
 def _section(
-    account_type: AccountType, chart: list[Account], activity: dict[str, Activity]
+    account_type: AccountType, chart: list[Account], activity: dict[str, Decimal]
 ) -> StatementSection:
-    """The accounts of ``account_type`` with their amounts rolled up the hierarchy."""
+    """The accounts of ``account_type`` with their amounts rolled up the hierarchy,
+    stated in the type's normal direction."""
     accounts = [account for account in chart if account.account_type is account_type]
     children: defaultdict[int | None, list[Account]] = defaultdict(list)
     for account in accounts:  # the chart is in code order, so each list is too
         children[account.parent_id].append(account)
 
-    rolled_up: dict[int, Activity] = {}
+    rolled_up: dict[int, Decimal] = {}
 
-    def roll_up(account: Account) -> Activity:
-        total = activity.get(account.code, Activity())
+    def roll_up(account: Account) -> Decimal:
+        total = activity.get(account.code, ZERO)
         for child in children[account.id]:
             total += roll_up(child)
         rolled_up[account.id] = total
         return total
 
     normal = account_type.normal_balance
-    total = sum((roll_up(root) for root in children[None]), Activity())
+    total = sum((roll_up(root) for root in children[None]), ZERO)
 
     lines: list[StatementLine] = []
 
     def visit(account: Account, depth: int) -> None:
-        amount = rolled_up[account.id].balance(normal)
+        amount = _in_direction(rolled_up[account.id], normal)
         if amount == ZERO:
             return
         lines.append(
@@ -346,8 +338,17 @@ def _section(
     for root in children[None]:
         visit(root, 0)
     return StatementSection(
-        account_type=account_type, lines=tuple(lines), total=total.balance(normal)
+        account_type=account_type,
+        lines=tuple(lines),
+        total=_in_direction(total, normal),
     )
+
+
+def _in_direction(amount: Decimal, normal_balance: NormalBalance) -> Decimal:
+    """``amount``, signed debits positive, stated on the ``normal_balance`` side."""
+    if normal_balance is NormalBalance.DEBIT:
+        return amount
+    return ZERO - amount  # never -0.00
 
 
 def _accounts_by_code(session: Session) -> dict[str, Account]:

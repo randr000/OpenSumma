@@ -36,9 +36,10 @@ class Shape:
 
 
 def shape(entry: dict[str, Any]) -> Shape | None:
-    """How ``entry`` records its bill, if it has one debit line and one credit line."""
-    debits = [line for line in entry["lines"] if Decimal(line["debit"])]
-    credits = [line for line in entry["lines"] if Decimal(line["credit"])]
+    """How ``entry`` records its bill, if it has one debit line and one credit line:
+    one positive amount and one negative."""
+    debits = [line for line in entry["lines"] if Decimal(line["amount"]) > 0]
+    credits = [line for line in entry["lines"] if Decimal(line["amount"]) < 0]
     if len(debits) != 1 or len(credits) != 1:
         return None
     (debit,), (credit,) = debits, credits
@@ -121,12 +122,12 @@ def record_bill(tools: Tools, object_id: int) -> int:
         lines=[
             {
                 "account": usual.debit_account,
-                "debit": data["amount"],
+                "amount": data["amount"],
                 "dimensions": tags(usual.debit_tags),
             },
             {
                 "account": usual.credit_account,
-                "credit": data["amount"],
+                "amount": str(-Decimal(data["amount"])),
                 "dimensions": tags(usual.credit_tags),
             },
         ],

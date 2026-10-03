@@ -178,8 +178,11 @@ These are non-negotiable.
 Every POSTED journal entry must satisfy:
 
 ```text
-SUM(debits) = SUM(credits)
+SUM(amount) = 0
 ```
+
+Journal line amounts are signed: a debit is positive and a credit negative, so this is
+`SUM(debits) = SUM(credits)`.
 
 Every valid company's financial position must satisfy:
 
@@ -246,9 +249,10 @@ VOIDED
 
 A journal entry must contain at least two lines.
 
-A line may contain either a debit or a credit, never both.
+Each line carries a single signed amount (the algebraic sign convention): positive
+for a debit, negative for a credit. There are no separate debit and credit columns.
 
-Debit and credit amounts must be non-negative.
+A line may have a zero amount.
 
 ---
 
@@ -679,7 +683,7 @@ For example:
 
 ```text
 Journal Entry:
-compare account IDs and debit/credit amounts
+compare account IDs and signed amounts
 
 Trial Balance:
 compare numerical values
@@ -705,8 +709,8 @@ At minimum test:
 balanced journal entry
 unbalanced journal entry
 single-line journal entry
-debit + credit on same line
-negative amount
+negative amount (a credit)
+zero-amount line
 inactive account
 closed period
 invalid dimension
@@ -720,7 +724,7 @@ Add property-based tests for accounting invariants when practical.
 Critical invariant:
 
 ```text
-total posted debits == total posted credits
+SUM(posted amounts) == 0, i.e. total posted debits == total posted credits
 ```
 
 Run:

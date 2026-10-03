@@ -24,9 +24,10 @@ def propose_journal_entry(
 ) -> schemas.JournalEntryOut:
     """Propose a journal entry (PROPOSER), linked to an accounting object if given.
 
-    Amounts are strings. An entry that cannot be recorded at all is refused with
-    its issue codes; one that can be recorded but not posted yet, such as an
-    unbalanced one, is proposed, and ``validate`` says why.
+    Amounts are signed strings: a debit positive, a credit negative. An entry that
+    cannot be recorded at all is refused with its issue codes; one that can be
+    recorded but not posted yet, such as an unbalanced one, is proposed, and
+    ``validate`` says why.
     """
     obj = (
         None
@@ -42,8 +43,7 @@ def propose_journal_entry(
             lines=[
                 LineInput(
                     line.account,
-                    debit=Decimal(line.debit),
-                    credit=Decimal(line.credit),
+                    Decimal(line.amount),
                     memo=line.memo,
                     dimensions=line.dimensions,
                 )

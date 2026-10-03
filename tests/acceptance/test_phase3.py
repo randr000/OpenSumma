@@ -19,6 +19,8 @@ these transactions, not taken from the code under test:
 
 Also recorded but never posted: a draft (6700, 999.00) and a voided entry
 (6800, 777.00). Neither may appear in any report.
+
+Each debit is recorded as a positive amount and each credit as a negative one.
 """
 
 from collections.abc import Iterator
@@ -65,14 +67,8 @@ def _entry(
         entry_date=date(2026, 1, day),
         description=text,
         lines=[
-            *(
-                LineInput(code, debit=Decimal(amount))
-                for code, amount in debits.items()
-            ),
-            *(
-                LineInput(code, credit=Decimal(amount))
-                for code, amount in credits.items()
-            ),
+            *(LineInput(code, Decimal(amount)) for code, amount in debits.items()),
+            *(LineInput(code, -Decimal(amount)) for code, amount in credits.items()),
         ],
     )
 
@@ -131,7 +127,7 @@ def test_the_ledger_is_immutable_and_append_only(january: Session) -> None:
     rent = next(line for line in lines if line.description == "Rent")
     entry = january.get(JournalEntry, rent.entry_id)
     assert entry is not None
-    entry.lines[0].debit = Decimal("1.00")
+    entry.lines[0].amount = Decimal("1.00")
     with pytest.raises(ImmutableEntryError):
         january.commit()
     january.rollback()
@@ -142,25 +138,26 @@ def test_the_ledger_is_immutable_and_append_only(january: Session) -> None:
 def test_trial_balance_works(january: Session) -> None:
     report = trial_balance(january, as_of=JAN_31)
 
-    assert [
-        (line.account_code, str(line.debit), str(line.credit)) for line in report.lines
-    ] == [
-        ("1111", "82000.00", "0.00"),
-        ("1120", "4000.00", "0.00"),
-        ("1510", "24000.00", "0.00"),
-        ("1590", "0.00", "400.00"),
-        ("2110", "0.00", "1200.00"),
-        ("2130", "0.00", "1500.00"),
-        ("3100", "0.00", "100000.00"),
-        ("4100", "0.00", "15000.00"),
-        ("4200", "0.00", "5000.00"),
-        ("4900", "1000.00", "0.00"),
-        ("6100", "1200.00", "0.00"),
-        ("6200", "2500.00", "0.00"),
-        ("6300", "8000.00", "0.00"),
-        ("6600", "400.00", "0.00"),
+    assert [(line.account_code, str(line.balance)) for line in report.lines] == [
+        ("1111", "82000.00"),
+        ("1120", "4000.00"),
+        ("1510", "24000.00"),
+        ("1590", "-400.00"),
+        ("2110", "-1200.00"),
+        ("2130", "-1500.00"),
+        ("3100", "-100000.00"),
+        ("4100", "-15000.00"),
+        ("4200", "-5000.00"),
+        ("4900", "1000.00"),
+        ("6100", "1200.00"),
+        ("6200", "2500.00"),
+        ("6300", "8000.00"),
+        ("6600", "400.00"),
     ]  # 6500 is absent: the misposting and its reversal cancel out
-    assert report.total_debits == report.total_credits == Decimal("123100.00")
+    balances = [line.balance for line in report.lines]
+    assert sum(b for b in balances if b > 0) == Decimal("123100.00")  # debits
+    assert sum(b for b in balances if b < 0) == Decimal("-123100.00")  # credits
+    assert str(report.total) == "0.00"
     assert report.is_balanced
 
 
@@ -172,14 +169,13 @@ def test_general_ledger_works(january: Session) -> None:
     (bank,) = report.accounts
     assert bank.opening_balance == Decimal("81000.00")  # 100,000 - 24,000 + 5,000
     assert [
-        (line.description, str(line.debit), str(line.credit), str(line.balance))
-        for line in bank.lines
+        (line.description, str(line.amount), str(line.balance)) for line in bank.lines
     ] == [
-        ("Customer payment", "10000.00", "0.00", "91000.00"),
-        ("Misposted T&E", "0.00", "300.00", "90700.00"),
-        ("Reversal of journal entry 11", "300.00", "0.00", "91000.00"),
-        ("Rent", "0.00", "2500.00", "88500.00"),
-        ("Payroll", "0.00", "6500.00", "82000.00"),
+        ("Customer payment", "10000.00", "91000.00"),
+        ("Misposted T&E", "-300.00", "90700.00"),
+        ("Reversal of journal entry 11", "300.00", "91000.00"),
+        ("Rent", "-2500.00", "88500.00"),
+        ("Payroll", "-6500.00", "82000.00"),
     ]
     assert bank.closing_balance == Decimal("82000.00")
 
@@ -233,8 +229,8 @@ def test_the_accounting_equation_holds(january: Session) -> None:
         entry_date=date(2026, 2, 3),
         description="Pay AWS",
         lines=[
-            LineInput("2110", debit=Decimal("1200.00")),
-            LineInput("1111", credit=Decimal("1200.00")),
+            LineInput("2110", Decimal("1200.00")),
+            LineInput("1111", Decimal("-1200.00")),
         ],
     )
     post_journal_entry(january, february)
@@ -272,4 +268,4 @@ def test_financial_reports_derive_from_the_posted_ledger(january: Session) -> No
     assert income_statement(january, start=JAN_1, end=JAN_31).net_income == Decimal(
         "6400.00"
     )
-    assert account_balance(january, "2120", as_of=JAN_31).balance == Decimal("500.00")
+    assert account_balance(january, "2120", as_of=JAN_31).balance == Decimal("-500.00")

@@ -44,8 +44,8 @@ from opensumma.workflow import (
 
 MARCH_15 = date(2026, 3, 15)
 RENT = [
-    LineInput("6200", debit=Decimal("2500.00"), dimensions={"LOCATION": "HQ"}),
-    LineInput("1111", credit=Decimal("2500.00")),
+    LineInput("6200", Decimal("2500.00"), dimensions={"LOCATION": "HQ"}),
+    LineInput("1111", Decimal("-2500.00")),
 ]
 
 
@@ -124,15 +124,13 @@ def test_a_proposal_records_its_input_exactly(books: Session, agent: Actor) -> N
         "lines": [
             {
                 "account": "6200",
-                "debit": "2500.00",
-                "credit": "0.00",
+                "amount": "2500.00",
                 "memo": None,
                 "dimensions": {"LOCATION": "HQ"},
             },
             {
                 "account": "1111",
-                "debit": "0.00",
-                "credit": "2500.00",
+                "amount": "-2500.00",
                 "memo": None,
                 "dimensions": {},
             },
@@ -217,8 +215,8 @@ def test_a_refusal_by_the_kernel_records_its_issue_codes(
         entry_date=MARCH_15,
         description="Unbalanced",
         lines=[
-            LineInput("6200", debit=Decimal("2500.00")),
-            LineInput("1111", credit=Decimal("2400.00")),
+            LineInput("6200", Decimal("2500.00")),
+            LineInput("1111", Decimal("-2400.00")),
         ],
     )
     mark = _mark(books)
@@ -241,8 +239,8 @@ def test_a_proposal_the_kernel_cannot_record_is_audited_without_an_object(
             entry_date=MARCH_15,
             description="Unknown account",
             lines=[
-                LineInput("9999", debit=Decimal("1.00")),
-                LineInput("1111", credit=Decimal("1.00")),
+                LineInput("9999", Decimal("1.00")),
+                LineInput("1111", Decimal("-1.00")),
             ],
         )
     (event,) = _since(books, mark)
@@ -291,7 +289,7 @@ def test_changes_outside_the_workflow_are_captured_as_the_system(
     assert (created.object_type, created.object_id) == ("journal_entry", entry.id)
     assert created.input["values"]["status"] == "DRAFT"
     assert created.input["values"]["description"] == "Rent"
-    assert events[1].input["values"]["debit"] == "2500.00"
+    assert events[1].input["values"]["amount"] == "2500.00"
 
     posting = events[4].input["changes"]
     assert posting["status"] == {"from": "DRAFT", "to": "POSTED"}
@@ -587,5 +585,5 @@ def test_a_line_removed_from_a_draft_is_captured(books: Session) -> None:
         "delete_journal_line_dimension",
         "delete_journal_line",
     ]
-    assert events[1].input["values"]["debit"] == "2500.00"
+    assert events[1].input["values"]["amount"] == "2500.00"
     assert events[1].input["values"]["account_id"] == get_account(books, "6200").id

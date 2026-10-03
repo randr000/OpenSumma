@@ -159,8 +159,8 @@ def test_an_object_the_ledger_carries_is_not_voided(
         entry_date=RECEIVED.date(),
         description="Stratus INV-88",
         lines=[
-            LineInput("5200", debit=Decimal("310.00")),
-            LineInput("2110", credit=Decimal("310.00")),
+            LineInput("5200", Decimal("310.00")),
+            LineInput("2110", Decimal("-310.00")),
         ],
     )
     post_journal_entry(books, entry)

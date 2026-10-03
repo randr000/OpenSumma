@@ -84,10 +84,8 @@ def test_every_transaction_is_a_valid_journal_entry(plan: Plan) -> None:
         assert date(2026, 1, 1) <= t.entry_date <= date(2026, 12, 31), t.key
         assert t.description.strip(), t.key
         for line in t.lines:
-            assert (line.debit > ZERO) != (line.credit > ZERO), t.key
-            assert ZERO in (line.debit, line.credit), t.key
-            for amount in (line.debit, line.credit):
-                assert amount.as_tuple().exponent == -2, t.key
+            assert line.amount != ZERO, t.key  # a debit or a credit, never zero
+            assert line.amount.as_tuple().exponent == -2, t.key
             assert line.account in LEAF_ACCOUNTS, t.key
             assert set(line.dimensions) <= DIMENSION_VALUES, t.key
 
@@ -160,7 +158,7 @@ def test_impossible_plans_are_refused(arguments: dict[str, int], message: str) -
 def test_every_movement_of_cash_is_on_the_bank_statement(plan: Plan) -> None:
     references = []
     for t in plan.transactions:
-        cash = sum((line.net for line in t.lines if line.account == "1111"), ZERO)
+        cash = sum((line.amount for line in t.lines if line.account == "1111"), ZERO)
         posted = statement_date(t)
         if t.kind == "opening_balances":
             assert posted is None
@@ -193,7 +191,7 @@ def test_cash_and_inventory_never_run_out(size: int, seed: int) -> None:
         for t in by_day[day]:
             for line in t.lines:
                 if line.account in balances:
-                    balances[line.account] += line.net
+                    balances[line.account] += line.amount
         assert min(balances.values()) >= ZERO, (day, balances)
 
 
@@ -226,8 +224,8 @@ def test_accruals_reverse_on_the_first_of_the_next_month(plan: Plan) -> None:
     for accrual in accruals[:-1]:
         reversal = reversals[accrual.key]
         assert reversal.entry_date == accrual.entry_date + timedelta(days=1)
-        assert [(line.account, line.debit, line.credit) for line in reversal.lines] == [
-            (line.account, line.credit, line.debit) for line in accrual.lines
+        assert [(line.account, line.amount) for line in reversal.lines] == [
+            (line.account, -line.amount) for line in accrual.lines
         ]
     assert accruals[-1].key not in reversals  # December's stays at year end
 
@@ -238,7 +236,7 @@ def test_documents_carry_what_their_entries_record(plan: Plan) -> None:
             assert t.document is not None and t.document.counterparty, t.key
             assert Decimal(str(_data(t)["amount"])) == t.amount, t.key
         if t.kind == "sale":
-            assert Decimal(str(_data(t)["amount"])) == t.lines[0].debit
+            assert Decimal(str(_data(t)["amount"])) == t.lines[0].amount
         if t.kind in ("vendor_bill", "card_expense") and t.lines[0].dimensions:
             data = _data(t)
             assert t.lines[0].dimension("DEPARTMENT") == data["department"], t.key

@@ -7,7 +7,9 @@ Each section names the phase that implements it.
 
 These are non-negotiable, and every phase must preserve them.
 
-1. Every posted journal entry balances: `SUM(debits) = SUM(credits)`.
+1. Every posted journal entry balances: its line amounts sum to zero,
+   `SUM(amount) = 0`, which is `SUM(debits) = SUM(credits)` with debits positive and
+   credits negative (see [Signed amounts](#signed-amounts)).
 2. The accounting equation holds: `Assets = Liabilities + Equity`. Before period close,
    current-period earnings sit in revenue and expense accounts, so the working form is
    `Assets = Liabilities + Equity + (Revenue − Expenses)`.
@@ -16,10 +18,11 @@ These are non-negotiable, and every phase must preserve them.
 4. A closed accounting period accepts no postings.
 5. All monetary amounts use `Decimal` with exactly two decimal places. Floating-point
    arithmetic is never used for amounts. See [Money](#money).
-6. A journal entry has at least two lines. Each line is either a debit or a credit, never
-   both, and that amount is strictly positive: there are no zero-amount lines.
+6. A journal entry has at least two lines. Each line carries one signed amount: a
+   debit is positive, a credit negative, and a line may be zero.
 
-System-wide consequence: total posted debits equal total posted credits at all times.
+System-wide consequence: the posted amounts sum to zero at all times, so total posted
+debits equal total posted credits.
 
 ## Flow of accounting truth
 
@@ -52,6 +55,9 @@ Implemented in `opensumma.money`.
   so rounding is always an explicit decision by the caller.
 - Migrations record `Money` columns as `sa.BigInteger()` and don't import application
   code.
+- A `Money` column holds signed cents, so a credit is stored as a negative number.
+  `ensure_money()` returns `0.00` for a negative zero, which negating a zero amount
+  gives, so `-0.00` never reaches the books or a report.
 
 ## Currency
 
@@ -102,6 +108,8 @@ Implemented in `opensumma.kernel.accounts` and `opensumma.kernel.models`.
 - Contra accounts, such as accumulated depreciation, carry the opposite normal balance
   to their type. The normal balance is stored per account and defaults from the type;
   `Account.is_contra` reports the difference.
+- With [signed amounts](#signed-amounts), the normal balance is the sign an account's
+  balance usually has: positive for DEBIT, negative for CREDIT.
 - `opensumma.kernel.seed` holds a default chart of accounts, created through the same
   services as any other account so that it obeys the same rules.
 
@@ -163,22 +171,39 @@ thing the kernel adds for the workflow is that an entry's content is locked from
 submission onward (see [Immutability](#immutability)).
 
 An entry has an accounting date, a required description, and numbered lines. A line
-names one account, carries a debit or a credit, an optional memo, and at most one value
+names one account, carries one signed amount, an optional memo, and at most one value
 per dimension. Its period is not stored: the accounting date determines it.
+
+### Signed amounts
+
+Each line stores a single `amount` column, following the algebraic sign convention:
+
+| Amount | Means |
+| --- | --- |
+| Positive | A debit |
+| Negative | A credit |
+| Zero | Neither; the line affects no balance |
+
+An entry balances when its amounts sum to zero (`JournalEntry.total`), and a reversal
+negates every amount. Balances follow the same sign: an account's balance is the sum
+of its posted amounts, positive for a debit balance and negative for a credit balance,
+so the balances of all accounts together sum to zero. Neither a negative debit nor a
+line that is both a debit and a credit can be written, so neither needs a rule.
+
+A zero line is allowed. It is recorded and posted like any other, appears in the ledger
+and the general ledger, and changes no balance; a reversal of it is zero too.
 
 ### Two tiers of rules
 
 **Recording** (`create_journal_entry`) rejects what cannot be stored at all. The
-database enforces the line shape too, so a direct write cannot store it either.
+`Money` column rejects an inexact amount too, so a direct write cannot store one
+either.
 
 | Code | Rule |
 | --- | --- |
 | MISSING_DESCRIPTION | Every entry says what it records |
 | TEXT_TOO_LONG | Descriptions and memos fit their columns (500 characters) |
 | INVALID_AMOUNT | Amounts are `Decimal`, finite, whole cents, and fit 64 bits; never rounded |
-| NEGATIVE_AMOUNT | Amounts are not negative |
-| DEBIT_AND_CREDIT | A line is a debit or a credit, never both |
-| ZERO_AMOUNT | A line's amount is strictly positive |
 | UNKNOWN_ACCOUNT | The account exists |
 | UNKNOWN_DIMENSION | The dimension exists |
 | UNKNOWN_DIMENSION_VALUE | The value exists within that dimension |
@@ -191,7 +216,7 @@ posting.
 | Code | Rule |
 | --- | --- |
 | TOO_FEW_LINES | At least two lines |
-| UNBALANCED | Total debits equal total credits, in exact `Decimal` arithmetic |
+| UNBALANCED | The line amounts sum to zero, in exact `Decimal` arithmetic; the message gives the sum and which side is larger |
 | NO_PERIOD | An accounting period contains the entry's date |
 | PERIOD_CLOSED | That period is open |
 | ACCOUNT_NOT_POSTABLE | Every account is a leaf, not an aggregate |
@@ -238,9 +263,9 @@ access, so that is the boundary. Database triggers were considered and rejected;
 
 ### Reversal
 
-- A reversal is a new journal entry with every line's debit and credit swapped, keeping
-  the accounts, memos, and dimension values, linked to the original by `reversal_of`.
-  The original becomes REVERSED; both stay in the ledger and net to nothing.
+- A reversal is a new journal entry with every line's amount negated, keeping the
+  accounts, memos, and dimension values, linked to the original by `reversal_of`. The
+  original becomes REVERSED; both stay in the ledger and net to nothing.
 - The reversal's accounting date is required, not defaulted: the original's period may
   be closed, and choosing "today" would make results depend on when code runs.
 - The reversal is validated like any other entry. If it is not valid, for example
@@ -280,20 +305,25 @@ can see a draft, a proposal, a voided entry, or an Accounting Object.
 
 ### Balances and signs
 
-- `account_balance` states a balance in the account's normal direction, so it is
-  positive when the account carries its usual balance. A parent's balance is the sum of
-  the accounts below it in the parent's direction, so a contra account reduces it: fixed
+- The ledger aggregates one signed column: `posted_activity` and `activity_before` give
+  each account's posted amounts summed, debits positive.
+- `account_balance` is that sum: positive for a debit balance and negative for a credit
+  balance, whatever the account's normal balance, which it reports alongside. A bank
+  account with money in it is positive; a payable that is owed is negative. A parent's
+  balance is the sum of the accounts below it, so a contra account reduces it: fixed
   assets are shown net of accumulated depreciation.
-- The **trial balance** puts each account's net balance in the debit or the credit
-  column, whichever it falls in, and leaves off accounts that net to nothing. Its two
-  column totals are equal whenever the ledger is intact.
+- The **trial balance** lists each account's balance, signed the same way, and leaves
+  off accounts that net to nothing. Its `total` is zero whenever the ledger is intact;
+  the debit balances alone add up to the credit balances' magnitude.
 - The **general ledger** lists each account's lines by date, then entry, then line,
-  between an opening balance brought forward and a closing balance, with a running
-  balance in the account's normal direction. Lines keep their memos and dimensions.
-- **Financial statements** state each amount in its section's normal direction and roll
-  it up the account hierarchy, so a contra account shows as negative within its
-  section: accumulated depreciation reduces assets, sales returns reduce revenue.
-  Accounts whose amount is zero are left off.
+  with each line's signed amount, between an opening balance brought forward and a
+  closing balance, with a running balance that is the sum of the amounts so far. Lines
+  keep their memos and dimensions.
+- **Financial statements** are the one exception: they state each amount in its
+  section's normal direction, as statements are read, so revenue, liabilities, and
+  equity are positive. Amounts roll up the account hierarchy, so a contra account
+  shows as negative within its section: accumulated depreciation reduces assets, sales
+  returns reduce revenue. Accounts whose amount is zero are left off.
 - Every account the ledger touches is reported, active or not. An account retired after
   it was posted to still holds that history, and omitting it would unbalance the report.
 
@@ -584,7 +614,9 @@ every change made outside the workflow; see
 | Decision | Resolution |
 | --- | --- |
 | Currencies | One functional currency, two decimals, no currency column |
-| Zero-amount lines | Not allowed; each line has exactly one strictly positive side |
+| Line amounts | One signed `amount` per line: debits positive, credits negative (replaced separate non-negative debit and credit columns) |
+| Zero-amount lines | Allowed; a zero line affects no balance |
+| Signs of balances | Signed like the lines; only the financial statements use each section's normal direction |
 | Posting to parent accounts | Only leaf accounts are postable; parents aggregate |
 | Timestamps | UTC only, timezone-aware; accounting dates are plain dates |
 | Rounding at the kernel | Never; sub-cent amounts are rejected, callers round explicitly |

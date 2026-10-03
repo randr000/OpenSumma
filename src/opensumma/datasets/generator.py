@@ -54,8 +54,8 @@ from opensumma.objects import (
 from opensumma.workflow import audited
 
 # Bumped whenever the same parameters would generate different books.
-GENERATOR_VERSION = 1
-FORMAT = 1
+GENERATOR_VERSION = 2
+FORMAT = 2
 BOOKS_FILE = "books.db"
 MANIFEST_FILE = "manifest.json"
 GROUND_TRUTH_FILE = "ground_truth.json"
@@ -265,7 +265,6 @@ def _year_end(session: Session, year: int) -> dict[str, Any]:
         raise AssertionError("the generated books do not balance")
     return {
         "as_of": end.isoformat(),
-        "trial_balance_total": str(trial.total_debits),
         "total_assets": str(sheet.assets.total),
         "total_liabilities": str(sheet.liabilities.total),
         "total_equity": str(sheet.total_equity),
@@ -322,8 +321,7 @@ def _entry_json(transaction: Transaction, ids: RecordedIds) -> dict[str, Any]:
         "lines": [
             {
                 "account": line.account,
-                "debit": str(line.debit),
-                "credit": str(line.credit),
+                "amount": str(line.amount),
                 "dimensions": dict(line.dimensions),
             }
             for line in transaction.lines

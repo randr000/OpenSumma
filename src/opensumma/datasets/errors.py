@@ -518,10 +518,10 @@ class _Injector:
             lines=(
                 Line(
                     merchant.account,
-                    debit=money(amount),
+                    money(amount),
                     dimensions=dims(DEPARTMENT=department, LOCATION=location),
                 ),
-                Line(OPERATING_ACCOUNT, credit=money(amount)),
+                Line(OPERATING_ACCOUNT, -money(amount)),
             ),
             document=Document(
                 object_type=AccountingObjectType.EXPENSE,
@@ -577,8 +577,7 @@ class _Injector:
             lines=tuple(
                 replace(
                     line,
-                    debit=posted_amount if line.debit else ZERO,
-                    credit=posted_amount if line.credit else ZERO,
+                    amount=posted_amount if line.amount > ZERO else -posted_amount,
                 )
                 for line in original.lines
             ),

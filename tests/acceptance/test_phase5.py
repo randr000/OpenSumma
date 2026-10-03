@@ -12,8 +12,9 @@ The agent turns an emailed Stratus bill into a proposal, which Maria approves an
 the posting service posts: Dr 5200 Hosting 310.00, Cr 2110 AP 310.00. It proposes an
 invoice to Helio at 1,800.00 against product revenue; Maria rejects it, because the
 work was consulting, and the corrected proposal (Dr 1120, Cr 4200) is approved and
-posted. The trial balance at Mar 31 is therefore 1120 1,800.00 Dr; 2110 310.00 Cr;
-4200 1,800.00 Cr; 5200 310.00 Dr; totals 2,110.00.
+posted. The trial balance at Mar 31 is therefore, debit balances positive and
+credit balances negative: 1120 1,800.00; 2110 -310.00; 4200 -1,800.00; 5200 310.00;
+the debit balances total 2,110.00, as the credit balances do.
 """
 
 from collections.abc import Iterator
@@ -158,8 +159,8 @@ def march(database_url: str, engine: Engine) -> Iterator[March]:
             entry_date=date(2026, 3, 3),
             description="Stratus INV-88, March hosting",
             lines=[
-                LineInput("5200", debit=Decimal("310.00")),
-                LineInput("2110", credit=Decimal("310.00")),
+                LineInput("5200", Decimal("310.00")),
+                LineInput("2110", Decimal("-310.00")),
             ],
             accounting_object=bill,
             reason="Stratus bills have been hosting (5200) for twelve months",
@@ -188,8 +189,8 @@ def march(database_url: str, engine: Engine) -> Iterator[March]:
                 entry_date=date(2026, 3, 12),
                 description="Helio INV-C-7",
                 lines=[
-                    LineInput("1120", debit=Decimal("1800.00")),
-                    LineInput(revenue, credit=Decimal("1800.00")),
+                    LineInput("1120", Decimal("1800.00")),
+                    LineInput(revenue, Decimal("-1800.00")),
                 ],
                 accounting_object=invoice,
             )
@@ -277,8 +278,8 @@ def test_agent_proposals_can_enter_the_workflow(march: March) -> None:
         entry_date=MAR_31,
         description="Accrue March electricity",
         lines=[
-            LineInput("6200", debit=Decimal("90.00")),
-            LineInput("2120", credit=Decimal("90.00")),
+            LineInput("6200", Decimal("90.00")),
+            LineInput("2120", Decimal("-90.00")),
         ],
     )
     submit_for_approval(session, draft, actor=march.agent)
@@ -313,8 +314,8 @@ def test_human_approval_can_be_represented(march: March) -> None:
         entry_date=MAR_31,
         description="Maria's own adjustment",
         lines=[
-            LineInput("6700", debit=Decimal("15.00")),
-            LineInput("1111", credit=Decimal("15.00")),
+            LineInput("6700", Decimal("15.00")),
+            LineInput("1111", Decimal("-15.00")),
         ],
     )
     submit_for_approval(session, own, actor=march.maria)
@@ -330,8 +331,8 @@ def test_posting_requires_appropriate_state_and_permission(march: March) -> None
         entry_date=MAR_31,
         description="Office supplies",
         lines=[
-            LineInput("6700", debit=Decimal("45.00")),
-            LineInput("1111", credit=Decimal("45.00")),
+            LineInput("6700", Decimal("45.00")),
+            LineInput("1111", Decimal("-45.00")),
         ],
     )
     submit_for_approval(session, pending, actor=march.agent)
@@ -343,15 +344,16 @@ def test_posting_requires_appropriate_state_and_permission(march: March) -> None
 
     # Only what was posted is in the ledger: the approved entry is not, yet.
     report = trial_balance(session, as_of=MAR_31)
-    assert [
-        (line.account_code, str(line.debit), str(line.credit)) for line in report.lines
-    ] == [
-        ("1120", "1800.00", "0.00"),
-        ("2110", "0.00", "310.00"),
-        ("4200", "0.00", "1800.00"),
-        ("5200", "310.00", "0.00"),
+    assert [(line.account_code, str(line.balance)) for line in report.lines] == [
+        ("1120", "1800.00"),
+        ("2110", "-310.00"),
+        ("4200", "-1800.00"),
+        ("5200", "310.00"),
     ]
-    assert report.total_debits == report.total_credits == Decimal("2110.00")
+    assert sum(line.balance for line in report.lines if line.balance > 0) == Decimal(
+        "2110.00"
+    )
+    assert str(report.total) == "0.00"
 
     # Closing March is an admin's call, in order, and not over unposted entries.
     march_period = get_period(session, "2026-03")

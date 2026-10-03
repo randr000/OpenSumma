@@ -59,7 +59,7 @@ from opensumma.objects import (
 )
 from opensumma.workflow import AuditResult, audit_history
 
-BENCHMARK_VERSION = 1
+BENCHMARK_VERSION = 2
 FORMAT = 1
 RESULTS_FILE = "results.json"
 RESULTS_CSV = "results.csv"

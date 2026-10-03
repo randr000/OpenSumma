@@ -201,7 +201,8 @@ _LEDGER_STATUSES = ", ".join(f"'{status.value}'" for status in LEDGER_STATUSES)
 
 
 class JournalEntry(TimestampMixin, Base):
-    """Debit and credit lines recorded together on one accounting date.
+    """Lines recorded together on one accounting date, whose amounts sum to zero
+    once the entry balances: debits are positive and credits negative.
 
     Once posted, an entry is part of the ledger and never changes again, except
     that it is marked REVERSED when a reversing entry offsets it.
@@ -251,16 +252,14 @@ class JournalEntry(TimestampMixin, Base):
         super().__init__(**kwargs)
 
     @property
-    def total_debits(self) -> Decimal:
-        return sum((line.debit for line in self.lines), ZERO)
-
-    @property
-    def total_credits(self) -> Decimal:
-        return sum((line.credit for line in self.lines), ZERO)
+    def total(self) -> Decimal:
+        """The sum of the lines' amounts: zero when the entry balances, positive
+        when its debits exceed its credits."""
+        return sum((line.amount for line in self.lines), ZERO)
 
     @property
     def is_balanced(self) -> bool:
-        return self.total_debits == self.total_credits
+        return self.total == ZERO
 
     def structure_issues(self) -> list[ValidationIssue]:
         """What makes the entry unfit for the ledger whatever the master data says.
@@ -279,12 +278,14 @@ class JournalEntry(TimestampMixin, Base):
                 )
             )
         if not self.is_balanced:
-            debits, credits = self.total_debits, self.total_credits
+            total = self.total
+            larger = "debits" if total > ZERO else "credits"
+            smaller = "credits" if total > ZERO else "debits"
             issues.append(
                 ValidationIssue(
                     IssueCode.UNBALANCED,
-                    f"debits total {debits} but credits total {credits}, "
-                    f"a difference of {debits - credits}",
+                    f"the line amounts sum to {total} rather than zero: {larger} "
+                    f"exceed {smaller} by {abs(total)}",
                 )
             )
         return issues
@@ -294,26 +295,23 @@ class JournalEntry(TimestampMixin, Base):
 
 
 class JournalLine(Base):
-    """One debit or one credit to one account, within a journal entry."""
+    """One amount posted to one account, within a journal entry.
+
+    The amount is signed: a debit is positive, a credit negative. A line may be
+    zero, which affects no balance.
+    """
 
     __tablename__ = "journal_line"
     __table_args__ = (
         UniqueConstraint("journal_entry_id", "line_number"),
         CheckConstraint("line_number >= 1", name="line_number_positive"),
-        # Exactly one side carries a strictly positive amount: never both, never
-        # neither, never a negative amount.
-        CheckConstraint(
-            "(debit > 0 AND credit = 0) OR (debit = 0 AND credit > 0)",
-            name="one_positive_side",
-        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     journal_entry_id: Mapped[int] = mapped_column(ForeignKey("journal_entry.id"))
     line_number: Mapped[int]
     account_id: Mapped[int] = mapped_column(ForeignKey("account.id"), index=True)
-    debit: Mapped[Decimal] = mapped_column(Money, default=ZERO)
-    credit: Mapped[Decimal] = mapped_column(Money, default=ZERO)
+    amount: Mapped[Decimal] = mapped_column(Money)
     memo: Mapped[str | None] = mapped_column(String(DESCRIPTION_LENGTH))
 
     entry: Mapped[JournalEntry] = relationship(back_populates="lines")
@@ -324,17 +322,8 @@ class JournalLine(Base):
         cascade="all, delete-orphan",
     )
 
-    def __init__(self, **kwargs: Any) -> None:
-        # Column defaults apply only at flush; totals are needed before that.
-        kwargs.setdefault("debit", ZERO)
-        kwargs.setdefault("credit", ZERO)
-        super().__init__(**kwargs)
-
     def __repr__(self) -> str:
-        return (
-            f"JournalLine(line_number={self.line_number!r}, "
-            f"debit={self.debit}, credit={self.credit})"
-        )
+        return f"JournalLine(line_number={self.line_number!r}, amount={self.amount})"
 
 
 class JournalLineDimension(Base):

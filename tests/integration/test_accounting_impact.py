@@ -14,7 +14,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from opensumma.kernel import (
-    Activity,
     EntryStatusError,
     IssueCode,
     JournalEntry,
@@ -50,8 +49,8 @@ from opensumma.objects import (
 MARCH_15 = date(2026, 3, 15)
 RECEIVED = datetime(2026, 3, 15, 9, 30, tzinfo=UTC)
 AWS_BILL = (
-    LineInput("6100", debit=Decimal("1200.00")),
-    LineInput("2110", credit=Decimal("1200.00")),
+    LineInput("6100", Decimal("1200.00")),
+    LineInput("2110", Decimal("-1200.00")),
 )
 
 
@@ -115,14 +114,14 @@ def test_an_entry_the_kernel_cannot_record_is_neither_recorded_nor_linked(
         _record(
             books,
             bill,
-            LineInput("9999", debit=Decimal("1200.00")),
-            LineInput("2110", credit=Decimal("-1200.00")),
+            LineInput("9999", Decimal("1200.00")),
+            LineInput("2110", Decimal("-1200.005")),
         )
     books.flush()
 
     assert {issue.code for issue in caught.value.issues} == {
         IssueCode.UNKNOWN_ACCOUNT,
-        IssueCode.NEGATIVE_AMOUNT,
+        IssueCode.INVALID_AMOUNT,
     }
     assert _journal_entry_count(books) == 0
     assert _link_count(books) == 0
@@ -133,8 +132,8 @@ def test_posting_an_objects_entry_is_validated_by_the_kernel(books: Session) -> 
     unbalanced = _record(
         books,
         bill,
-        LineInput("6100", debit=Decimal("1200.00")),
-        LineInput("2110", credit=Decimal("1100.00")),
+        LineInput("6100", Decimal("1200.00")),
+        LineInput("2110", Decimal("-1100.00")),
     )
     with pytest.raises(JournalEntryError) as caught:
         post_journal_entry(books, unbalanced)
@@ -159,8 +158,8 @@ def test_a_posted_entry_is_the_objects_accounting_impact(books: Session) -> None
 
     impact = accounting_impact(books, bill)
     assert impact.activity == {
-        "6100": Activity(debits=Decimal("1200.00")),
-        "2110": Activity(credits=Decimal("1200.00")),
+        "6100": Decimal("1200.00"),
+        "2110": Decimal("-1200.00"),
     }
     assert impact.has_net_impact
     assert impact.posted_entry_ids == (entry.id,)
@@ -183,10 +182,7 @@ def test_a_reversal_is_part_of_the_impact_without_being_linked(
         (entry.id, JournalEntryStatus.REVERSED, True, None),
         (reversal.id, JournalEntryStatus.POSTED, False, entry.id),
     ]
-    assert impact.activity == {
-        "6100": Activity(Decimal("1200.00"), Decimal("1200.00")),
-        "2110": Activity(Decimal("1200.00"), Decimal("1200.00")),
-    }
+    assert impact.activity == {"6100": Decimal("0.00"), "2110": Decimal("0.00")}
     assert not impact.has_net_impact
 
 
@@ -218,8 +214,8 @@ def test_drafts_and_voided_entries_contribute_nothing(books: Session) -> None:
     books.commit()
 
     assert accounting_impact(books, bill).activity == {
-        "6100": Activity(debits=Decimal("1200.00")),
-        "2110": Activity(credits=Decimal("1200.00")),
+        "6100": Decimal("1200.00"),
+        "2110": Decimal("-1200.00"),
     }
 
 
@@ -238,8 +234,8 @@ def test_one_entry_can_record_several_objects(books: Session) -> None:
         entry_date=MARCH_15,
         description="Pay INV-1 and INV-2",
         lines=[
-            LineInput("2110", debit=Decimal("2400.00")),
-            LineInput("1111", credit=Decimal("2400.00")),
+            LineInput("2110", Decimal("2400.00")),
+            LineInput("1111", Decimal("-2400.00")),
         ],
     )
     link_journal_entry(books, first, entry)

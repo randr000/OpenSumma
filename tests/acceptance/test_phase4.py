@@ -18,9 +18,10 @@ Also observed but never in the ledger: a duplicate of INV-1001 arriving through 
 vendor portal (voided), and an invoice to Cedar & Pine whose proposed entry does not
 balance and credits a parent account (it cannot post).
 
-Trial balance at Mar 31: 1111 48,800 Dr; 1120 5,000 Dr; 2120 450 Cr; 3100 50,000
-Cr; 4200 5,000 Cr; 5200 1,200 Dr; 6700 450 Dr. Totals 55,450. 2110 and 6100 net to
-nothing. Net income: 5,000 - 1,200 - 450 = 3,350.
+Trial balance at Mar 31, debit balances positive and credit balances negative:
+1111 48,800; 1120 5,000; 2120 -450; 3100 -50,000; 4200 -5,000; 5200 1,200; 6700
+450. The debit balances total 55,450, as the credit balances do. 2110 and 6100 net
+to nothing. Net income: 5,000 - 1,200 - 450 = 3,350.
 """
 
 from collections.abc import Iterator
@@ -35,7 +36,6 @@ from sqlalchemy.orm import Session
 
 from opensumma.db import init_db
 from opensumma.kernel import (
-    Activity,
     IssueCode,
     JournalEntry,
     JournalEntryError,
@@ -79,9 +79,10 @@ def _at(day: int, hour: int = 9) -> datetime:
 
 
 def _lines(debits: dict[str, str], credits: dict[str, str]) -> list[LineInput]:
+    """Each debit as a positive amount, each credit as a negative one."""
     return [
-        *(LineInput(code, debit=Decimal(amount)) for code, amount in debits.items()),
-        *(LineInput(code, credit=Decimal(amount)) for code, amount in credits.items()),
+        *(LineInput(code, Decimal(amount)) for code, amount in debits.items()),
+        *(LineInput(code, -Decimal(amount)) for code, amount in credits.items()),
     ]
 
 
@@ -350,10 +351,10 @@ def test_objects_are_related_to_their_accounting_impact(march: March) -> None:
         (march.paid.id, JournalEntryStatus.POSTED, True),
     ]
     assert impact.activity == {
-        "6100": Activity(Decimal("1200.00"), Decimal("1200.00")),
-        "2110": Activity(Decimal("2400.00"), Decimal("2400.00")),
-        "5200": Activity(debits=Decimal("1200.00")),
-        "1111": Activity(credits=Decimal("1200.00")),
+        "6100": Decimal("0.00"),
+        "2110": Decimal("0.00"),
+        "5200": Decimal("1200.00"),
+        "1111": Decimal("-1200.00"),
     }  # the bill ended up as hosting expense, paid from the bank
     assert impact.has_net_impact
 
@@ -362,8 +363,8 @@ def test_objects_are_related_to_their_accounting_impact(march: March) -> None:
         march.payment,
     ]
     assert accounting_impact(march.session, march.order).activity == {
-        "6700": Activity(debits=Decimal("450.00")),
-        "2120": Activity(credits=Decimal("450.00")),
+        "6700": Decimal("450.00"),
+        "2120": Decimal("-450.00"),
     }
     assert accounting_impact(march.session, march.duplicate).entries == ()
 
@@ -416,18 +417,18 @@ def test_reports_derive_from_the_ledger_not_from_objects(march: March) -> None:
     assert sum(Decimal(bill.data["amount"]) for bill in bills) == Decimal("2400.00")
 
     report = trial_balance(session, as_of=MAR_31)
-    assert [
-        (line.account_code, str(line.debit), str(line.credit)) for line in report.lines
-    ] == [
-        ("1111", "48800.00", "0.00"),
-        ("1120", "5000.00", "0.00"),  # the unposted Cedar & Pine proposal is absent
-        ("2120", "0.00", "450.00"),
-        ("3100", "0.00", "50000.00"),
-        ("4200", "0.00", "5000.00"),
-        ("5200", "1200.00", "0.00"),
-        ("6700", "450.00", "0.00"),
+    assert [(line.account_code, str(line.balance)) for line in report.lines] == [
+        ("1111", "48800.00"),
+        ("1120", "5000.00"),  # the unposted Cedar & Pine proposal is absent
+        ("2120", "-450.00"),
+        ("3100", "-50000.00"),
+        ("4200", "-5000.00"),
+        ("5200", "1200.00"),
+        ("6700", "450.00"),
     ]  # 2110 and 6100 net to nothing
-    assert report.total_debits == report.total_credits == Decimal("55450.00")
+    balances = [line.balance for line in report.lines]
+    assert sum(b for b in balances if b > 0) == Decimal("55450.00")
+    assert str(report.total) == "0.00"
 
     assert income_statement(session, start=MAR_1, end=MAR_31).net_income == Decimal(
         "3350.00"

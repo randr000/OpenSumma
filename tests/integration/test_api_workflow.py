@@ -17,8 +17,8 @@ AWS = {
     "entry_date": "2026-03-15",
     "description": "AWS, March",
     "lines": [
-        {"account": "6100", "debit": "120.50", "dimensions": {"DEPARTMENT": "ENG"}},
-        {"account": "2110", "credit": "120.50"},
+        {"account": "6100", "amount": "120.50", "dimensions": {"DEPARTMENT": "ENG"}},
+        {"account": "2110", "amount": "-120.50"},
     ],
 }
 
@@ -58,7 +58,8 @@ def test_an_entry_goes_from_proposal_to_the_ledger(api: TestClient, auth: Auth) 
     )
     assert created.status_code == 201
     entry = created.json()
-    assert (entry["status"], entry["total_debits"]) == ("PROPOSED", "120.50")
+    assert (entry["status"], entry["total"]) == ("PROPOSED", "0.00")
+    assert [line["amount"] for line in entry["lines"]] == ["120.50", "-120.50"]
     entry_id = entry["id"]
 
     validation = _step(api, auth, entry_id, "validate", "agent").json()
@@ -75,10 +76,11 @@ def test_an_entry_goes_from_proposal_to_the_ledger(api: TestClient, auth: Auth) 
     trial = api.get(
         "/reports/trial-balance", params={"as_of": "2026-03-31"}, headers=auth("reader")
     ).json()
-    assert [(line["account_code"], line["debit"]) for line in trial["lines"]] == [
-        ("2110", "0.00"),
+    assert [(line["account_code"], line["balance"]) for line in trial["lines"]] == [
+        ("2110", "-120.50"),
         ("6100", "120.50"),
     ]
+    assert trial["total"] == "0.00"
 
     reversal = _step(
         api, auth, entry_id, "reverse", "poster", entry_date="2026-03-31", reason="Dup"
@@ -95,11 +97,11 @@ def test_an_entry_goes_from_proposal_to_the_ledger(api: TestClient, auth: Auth) 
 def test_amounts_are_strings_and_a_float_never_gets_in(
     api: TestClient, auth: Auth
 ) -> None:
-    body = {**AWS, "lines": [{"account": "6100", "debit": 120.5}, AWS["lines"][1]]}
+    body = {**AWS, "lines": [{"account": "6100", "amount": 120.5}, AWS["lines"][1]]}
     response = api.post("/journal-entries", json=body, headers=auth("agent"))
     assert response.status_code == 422
     assert response.json()["error"] == "RequestValidationError"
-    assert response.json()["details"][0]["loc"] == ["body", "lines", 0, "debit"]
+    assert response.json()["details"][0]["loc"] == ["body", "lines", 0, "amount"]
 
 
 def test_unknown_fields_are_refused_not_ignored(api: TestClient, auth: Auth) -> None:
@@ -109,14 +111,27 @@ def test_unknown_fields_are_refused_not_ignored(api: TestClient, auth: Auth) -> 
     assert response.status_code == 422
 
 
+def test_a_line_must_give_one_signed_amount(api: TestClient, auth: Auth) -> None:
+    """A line in the form of separate debit and credit fields is refused, not
+    recorded without an amount."""
+    for line in (
+        {"account": "6100", "debit": "120.50"},
+        {"account": "6100", "amount": "120.50", "debit": "120.50"},
+    ):
+        body = {**AWS, "lines": [line, AWS["lines"][1]]}
+        response = api.post("/journal-entries", json=body, headers=auth("agent"))
+        assert response.status_code == 422
+        assert response.json()["error"] == "RequestValidationError"
+
+
 def test_an_entry_the_kernel_cannot_record_is_refused_with_its_codes(
     api: TestClient, api_url: str, auth: Auth
 ) -> None:
     body = {
         **AWS,
         "lines": [
-            {"account": "9999", "debit": "10.00"},
-            {"account": "2110", "credit": "10.005"},
+            {"account": "9999", "amount": "10.00"},
+            {"account": "2110", "amount": "-10.005"},
         ],
     }
     response = api.post("/journal-entries", json=body, headers=auth("agent"))
@@ -136,8 +151,8 @@ def test_validation_reports_every_issue(api: TestClient, auth: Auth) -> None:
         {
             **AWS,
             "lines": [
-                {"account": "6000", "debit": "120.50"},
-                {"account": "2110", "credit": "100.00"},
+                {"account": "6000", "amount": "120.50"},
+                {"account": "2110", "amount": "-100.00"},
             ],
         },
     )
@@ -303,8 +318,8 @@ def test_an_agent_takes_a_bill_through_the_workflow(
             "entry_date": "2026-03-03",
             "description": "Paper Trail INV-5",
             "lines": [
-                {"account": "6700", "debit": "45.00"},
-                {"account": "2110", "credit": "45.00"},
+                {"account": "6700", "amount": "45.00"},
+                {"account": "2110", "amount": "-45.00"},
             ],
             "accounting_object_id": bill_id,
         },

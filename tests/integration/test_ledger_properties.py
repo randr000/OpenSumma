@@ -1,9 +1,11 @@
 """Property-based tests of the ledger's invariants.
 
-Hypothesis generates many journal entries, balanced and not, and for every one:
+Hypothesis generates many journal entries, balanced and not, with signed amounts,
+debits positive and credits negative, zero lines among them, and for every one:
 
 - an entry posts if and only if it has at least two lines and balances;
-- total debits in the ledger equal total credits, and so does every entry in it;
+- the amounts in the ledger sum to zero, so total debits equal total credits, and
+  so do the amounts of every entry in it;
 - an entry and its reversal net every account to zero;
 - every report agrees with balances worked out independently from the entries
   that were posted, whatever else was drafted, voided, or reversed.
@@ -52,34 +54,18 @@ LEAVES = sorted(
 
 TYPE_OF = {spec.code: spec.account_type for spec in DEFAULT_CHART_OF_ACCOUNTS}
 
-Line = tuple[str, str, int]  # (account code, "debit" or "credit", amount in cents)
+Line = tuple[str, int]  # (account code, signed amount in cents, debits positive)
 
 accounts = st.sampled_from(LEAVES)
-cents = st.integers(min_value=1, max_value=10**9)
-lines = st.tuples(accounts, st.sampled_from(["debit", "credit"]), cents)
+cents = st.one_of(st.integers(min_value=-(10**9), max_value=10**9), st.just(0))
+lines = st.tuples(accounts, cents)
 
 
 @st.composite
 def balanced_entries(draw: st.DrawFn) -> list[Line]:
-    """At least one debit and one credit, topped up on one side to balance."""
-    entry: list[Line] = [
-        *(
-            (account, "debit", amount)
-            for account, amount in draw(
-                st.lists(st.tuples(accounts, cents), min_size=1, max_size=4)
-            )
-        ),
-        *(
-            (account, "credit", amount)
-            for account, amount in draw(
-                st.lists(st.tuples(accounts, cents), min_size=1, max_size=4)
-            )
-        ),
-    ]
-    difference = _net(entry)
-    if difference:
-        side = "credit" if difference > 0 else "debit"
-        entry.append((draw(accounts), side, abs(difference)))
+    """At least one line, and one more that brings the amounts' sum to zero."""
+    entry = draw(st.lists(lines, min_size=1, max_size=7))
+    entry.append((draw(accounts), -_net(entry)))
     return draw(st.permutations(entry))
 
 
@@ -87,7 +73,7 @@ any_entries = st.one_of(balanced_entries(), st.lists(lines, max_size=6))
 
 
 def _net(entry: list[Line]) -> int:
-    return sum(amount if side == "debit" else -amount for _, side, amount in entry)
+    return sum(amount for _, amount in entry)
 
 
 def _record(session: Session, entry: list[Line], on: date = MARCH) -> JournalEntry:
@@ -99,22 +85,25 @@ def _record(session: Session, entry: list[Line], on: date = MARCH) -> JournalEnt
     )
 
 
-def _line_input(account: str, side: str, amount: int) -> LineInput:
-    value = Decimal(amount).scaleb(-2)
-    if side == "debit":
-        return LineInput(account, debit=value)
-    return LineInput(account, credit=value)
+def _line_input(account: str, amount: int) -> LineInput:
+    return LineInput(account, Decimal(amount).scaleb(-2))
 
 
 def _ledger_totals(session: Session) -> tuple[int, int]:
+    """The ledger's debits and its credits, each added up as positive cents."""
     debits, credits = session.execute(
         text(
-            "SELECT COALESCE(SUM(l.debit), 0), COALESCE(SUM(l.credit), 0) "
+            "SELECT COALESCE(SUM(CASE WHEN l.amount > 0 THEN l.amount END), 0), "
+            "COALESCE(SUM(CASE WHEN l.amount < 0 THEN -l.amount END), 0) "
             "FROM journal_line l JOIN journal_entry e ON e.id = l.journal_entry_id "
             "WHERE e.status IN ('POSTED', 'REVERSED')"
         )
     ).one()
     return int(debits), int(credits)
+
+
+def _journal_lines(session: Session) -> int:
+    return int(session.scalar(text("SELECT COUNT(*) FROM journal_line")) or 0)
 
 
 def _unbalanced_ledger_entries(session: Session) -> list[int]:
@@ -124,7 +113,7 @@ def _unbalanced_ledger_entries(session: Session) -> list[int]:
                 "SELECT e.id FROM journal_entry e "
                 "JOIN journal_line l ON l.journal_entry_id = e.id "
                 "WHERE e.status IN ('POSTED', 'REVERSED') "
-                "GROUP BY e.id HAVING SUM(l.debit) <> SUM(l.credit)"
+                "GROUP BY e.id HAVING SUM(l.amount) <> 0"
             )
         )
     )
@@ -133,7 +122,7 @@ def _unbalanced_ledger_entries(session: Session) -> list[int]:
 def _net_by_account(session: Session) -> Counter[str]:
     rows = session.execute(
         text(
-            "SELECT a.code, SUM(l.debit) - SUM(l.credit) "
+            "SELECT a.code, SUM(l.amount) "
             "FROM journal_line l "
             "JOIN journal_entry e ON e.id = l.journal_entry_id "
             "JOIN account a ON a.id = l.account_id "
@@ -157,7 +146,7 @@ def _scratch_books(engine: Engine) -> Iterator[Session]:
     with engine.connect() as connection:
         transaction = connection.begin()
         with Session(connection) as session:
-            assert _ledger_totals(session) == (0, 0), "examples must not share state"
+            assert _journal_lines(session) == 0, "examples must not share state"
             yield session
         transaction.rollback()
 
@@ -201,8 +190,8 @@ def test_an_entry_and_its_reversal_net_every_account_to_zero(
         expected: Counter[str] = Counter()
         for index, entry in enumerate(entries):
             if index not in reversed_:
-                for account, side, amount in entry:
-                    expected[account] += amount if side == "debit" else -amount
+                for account, amount in entry:
+                    expected[account] += amount
         assert _net_by_account(session) == Counter(
             {account: net for account, net in expected.items() if net}
         )
@@ -240,15 +229,15 @@ def test_every_report_agrees_with_what_was_posted(
             if fate == "reversed":
                 reverse_journal_entry(session, journal_entry, entry_date=on)
             if fate == "posted":
-                for account, side, amount in entry:
-                    net_debit[account] += amount if side == "debit" else -amount
+                for account, amount in entry:
+                    net_debit[account] += amount
 
         year_end = date(2026, 12, 31)
         trial = trial_balance(session, as_of=year_end)
         assert trial.is_balanced
-        assert {
-            line.account_code: _cents(line.debit - line.credit) for line in trial.lines
-        } == {account: net for account, net in net_debit.items() if net}
+        assert {line.account_code: _cents(line.balance) for line in trial.lines} == {
+            account: net for account, net in net_debit.items() if net
+        }
 
         revenue = sum(
             -net

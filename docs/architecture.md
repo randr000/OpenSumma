@@ -281,7 +281,11 @@ accounting logic of its own.
   422 `RequestValidationError` and never reaches the workflow, so it is not audited.
 - **Money as text.** Amounts are JSON strings, such as `"120.50"`, in both
   directions. A JSON number is refused as an amount, so a float cannot enter through
-  the interface. Requests refuse fields the schema does not name.
+  the interface. A journal line carries one signed `amount`, a debit positive and a
+  credit negative (`"-120.50"`), and balances are signed the same way; only the
+  financial statements state amounts in each section's normal direction. Requests
+  refuse fields the schema does not name, so a line written with the former `debit`
+  and `credit` fields is refused rather than recorded without an amount.
 - **Identifiers.** Accounts are addressed by their code (`/accounts/6100`), periods by
   their code (`/periods/2026-03`), and entries, objects, and audit events by number.
 - **Running it.** `python -m opensumma.api [--host H] [--port P] [--database-url U]`,
@@ -322,7 +326,9 @@ same identity, permissions, audit, and JSON.
   do not match a tool's schema are refused by the SDK, as text naming each field,
   before the tool runs, so they are not audited.
 - **Money as text, and no invented arguments.** Amounts are strings, as on the REST
-  interface, and a JSON number is refused as an amount. Every tool's input schema
+  interface, signed the same way, and a JSON number is refused as an amount. The
+  tools' descriptions state the sign convention, since an agent reads them to decide
+  how to call a tool. Every tool's input schema
   has `additionalProperties: false`, and an argument a tool does not declare is
   refused. The SDK ignores unknown arguments by default, which would let an argument
   an agent invented, such as `approved`, silently do nothing; the server replaces
@@ -434,8 +440,9 @@ duplicate-invoice agent, and the three as one.
 - `opensumma.db.create_engine()` turns on `PRAGMA foreign_keys=ON` for every SQLite
   connection. SQLite otherwise ignores foreign keys, and referential integrity is not
   optional for a ledger. PostgreSQL always enforces them.
-- Monetary columns use `opensumma.money.Money`: exact integer cents, never floats. See
-  [accounting-model.md](accounting-model.md#money).
+- Monetary columns use `opensumma.money.Money`: exact signed integer cents, never
+  floats. A journal line's one `amount` column is positive for a debit and negative for
+  a credit. See [accounting-model.md](accounting-model.md#money).
 - Business data uses `opensumma.objects.data.BusinessData`, a portable `JSON` column
   that refuses floats. Its fields are queried with SQLAlchemy's JSON operators, which
   render for SQLite and PostgreSQL alike.
@@ -511,6 +518,11 @@ record in another thread while the first is still open, and the first then commi
   SQLite can only do by rebuilding the table, and batch mode must read the live table to
   rebuild it. SQLite databases are always migrated live, through `init_db()` or
   `alembic upgrade head`.
+- Revision `db546c4d06cf` replaced each journal line's `debit` and `credit` columns
+  with one signed `amount`, converting every row as `debit - credit` in one SQL
+  statement. Its downgrade splits the amounts back, and refuses books that hold a zero
+  line, which the earlier schema could not represent, rather than altering posted
+  lines.
 
 Workflow for schema changes:
 

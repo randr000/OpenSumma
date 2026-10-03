@@ -139,7 +139,7 @@ def test_the_benchmark_is_the_same_on_every_machine(tmp_path: Path) -> None:
     run_benchmark(tmp_path / "dataset", OracleAgent(), tmp_path / "results")
     results = (tmp_path / "results" / "results.json").read_bytes()
     assert hashlib.sha256(results).hexdigest() == (
-        "16bcb5a3a9fac270aaba43205923a8d657bcc53556b68ce0d23e36d388c42985"
+        "762c287f5cd6868a978f06735ab793f9f1d7b78208eb8498166ec3d35e2f7744"
     )
 
 
@@ -284,8 +284,8 @@ def _bill_entry(tools: Tools, object_id: int, **changes: Any) -> dict[str, Any]:
         "entry_date": data["invoice_date"],
         "description": f"{data['vendor_name']} {data['invoice_number']}",
         "lines": [
-            {"account": vendor.account, "debit": data["amount"], "dimensions": tags},
-            {"account": "2110", "credit": data["amount"]},
+            {"account": vendor.account, "amount": data["amount"], "dimensions": tags},
+            {"account": "2110", "amount": str(-Decimal(data["amount"]))},
         ],
         "accounting_object_id": object_id,
         "reason": "Posted as this vendor's bills are",
@@ -409,4 +409,18 @@ def test_a_dataset_needs_its_own_ground_truth(
     truth["fingerprint"] = "sha256:other"
     (tmp_path / "ground_truth.json").write_text(json.dumps(truth))
     with pytest.raises(ValueError, match="other books"):
+        load_dataset(tmp_path)
+
+
+def test_a_dataset_in_an_earlier_format_is_generated_again(
+    dataset: DatasetFiles, tmp_path: Path
+) -> None:
+    """Format 1 books store debits and credits apart, which this version cannot
+    read; they are refused before a task runs on them."""
+    for name in ("books.db", "manifest.json", "ground_truth.json"):
+        (tmp_path / name).write_bytes((dataset.directory / name).read_bytes())
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    manifest["format"] = 1
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match=r"format 1\b.*generate it again"):
         load_dataset(tmp_path)

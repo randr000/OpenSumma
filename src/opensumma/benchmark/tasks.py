@@ -64,14 +64,12 @@ class BalanceAnswer(Answer):
 
 class TrialBalanceLine(BaseModel):
     account: str
-    debit: Amount = "0.00"
-    credit: Amount = "0.00"
+    balance: Amount = Field(description="Debit balances positive, credits negative")
 
 
 class TrialBalanceAnswer(Answer):
     lines: list[TrialBalanceLine] = Field(default_factory=list)
-    total_debits: Amount
-    total_credits: Amount
+    total: Amount
 
 
 class EntryIds(Answer):
@@ -162,8 +160,8 @@ def _balance_prepare(env: Environment) -> Prepared:
     balance = kernel.account_balance(env.session, code, as_of=as_of)
     return Prepared(
         f"{_books(env)} What was the balance of account {code} "
-        f"({balance.account_name}) at the end of {as_of.isoformat()}? State it in the "
-        "account's normal direction, positive when the account carries its usual "
+        f"({balance.account_name}) at the end of {as_of.isoformat()}? State it as a "
+        "signed amount: positive for a debit balance, negative for a credit "
         "balance.",
         {"balance": str(balance.balance)},
         {"account": code, "as_of": as_of.isoformat()},
@@ -190,48 +188,35 @@ def _trial_balance_prepare(env: Environment) -> Prepared:
     trial = kernel.trial_balance(env.session, as_of=as_of)
     return Prepared(
         f"{_books(env)} Prepare the trial balance at the end of {as_of.isoformat()}: "
-        "every account with a balance, in the debit or the credit column, and the "
-        "total of each column.",
+        "every account with a balance, as a signed amount, positive for a debit "
+        "balance and negative for a credit balance, and the total of the balances.",
         {
             "lines": [
-                {
-                    "account": line.account_code,
-                    "debit": str(line.debit),
-                    "credit": str(line.credit),
-                }
+                {"account": line.account_code, "balance": str(line.balance)}
                 for line in trial.lines
             ],
-            "total_debits": str(trial.total_debits),
-            "total_credits": str(trial.total_credits),
+            "total": str(trial.total),
         },
         {"as_of": as_of.isoformat()},
     )
 
 
 def _trial_balance_rows(
-    lines: Sequence[tuple[str, str, str]], debits: str, credits: str
-) -> set[tuple[str, Decimal, Decimal]]:
-    rows = {
-        (account, amount(debit), amount(credit)) for account, debit, credit in lines
-    }
-    return rows | {("TOTAL", amount(debits), amount(credits))}
+    lines: Sequence[tuple[str, str]], total: str
+) -> set[tuple[str, Decimal]]:
+    rows = {(account, amount(balance)) for account, balance in lines}
+    return rows | {("TOTAL", amount(total))}
 
 
 def _trial_balance_score(instance: Instance, answer: Answer, env: Environment) -> Score:
     assert isinstance(answer, TrialBalanceAnswer)
     expected = instance.expected
     right = _trial_balance_rows(
-        [
-            (line["account"], line["debit"], line["credit"])
-            for line in expected["lines"]
-        ],
-        expected["total_debits"],
-        expected["total_credits"],
+        [(line["account"], line["balance"]) for line in expected["lines"]],
+        expected["total"],
     )
     given = _trial_balance_rows(
-        [(line.account, line.debit, line.credit) for line in answer.lines],
-        answer.total_debits,
-        answer.total_credits,
+        [(line.account, line.balance) for line in answer.lines], answer.total
     )
     score = dice(right, given)
     return Score(score, numerical=score)
@@ -244,15 +229,10 @@ def _trial_balance_solve(instance: Instance, tools: Tools) -> dict[str, Any]:
     report = call.result
     return {
         "lines": [
-            {
-                "account": line["account_code"],
-                "debit": line["debit"],
-                "credit": line["credit"],
-            }
+            {"account": line["account_code"], "balance": line["balance"]}
             for line in report["lines"]
         ],
-        "total_debits": report["total_debits"],
-        "total_credits": report["total_credits"],
+        "total": report["total"],
     }
 
 
@@ -415,19 +395,18 @@ def _dimension_item(error: dict[str, Any]) -> tuple[int, str, str]:
 
 # --- Tasks in the workflow ------------------------------------------------------------
 
-Line = tuple[str, Decimal, Decimal, tuple[tuple[str, str], ...]]
+Line = tuple[str, Decimal, tuple[tuple[str, str], ...]]
 
 
-def _line(account: str, debit: str, credit: str, dimensions: dict[str, str]) -> Line:
-    return account, amount(debit), amount(credit), tuple(sorted(dimensions.items()))
+def _line(account: str, signed: str, dimensions: dict[str, str]) -> Line:
+    return account, amount(signed), tuple(sorted(dimensions.items()))
 
 
 def _recorded_lines(entry: JournalEntry) -> set[Line]:
     return {
         _line(
             line.account.code,
-            str(line.debit),
-            str(line.credit),
+            str(line.amount),
             {t.value.dimension.code: t.value.code for t in line.dimensions},
         )
         for line in entry.lines
@@ -482,13 +461,8 @@ def _new_bill(env: Environment) -> tuple[AccountingObject, dict[str, Any]]:
         "entry_date": day.isoformat(),
         "description": f"{vendor.name} - bill {number}",
         "lines": [
-            {
-                "account": vendor.account,
-                "debit": total,
-                "credit": "0.00",
-                "dimensions": tags,
-            },
-            {"account": "2110", "debit": "0.00", "credit": total, "dimensions": {}},
+            {"account": vendor.account, "amount": total, "dimensions": tags},
+            {"account": "2110", "amount": str(-Decimal(total)), "dimensions": {}},
         ],
     }
 
@@ -512,7 +486,10 @@ def _score_entry(
         return Score(
             0.0, workflow=0.0, details={"problem": "the agent did not propose it"}
         )
-    expected = {_line(**line) for line in instance.context["lines"]}
+    expected = {
+        _line(line["account"], line["amount"], line["dimensions"])
+        for line in instance.context["lines"]
+    }
     lines = dice(expected, _recorded_lines(entry))
     waiting = entry.status in (
         JournalEntryStatus.PROPOSED,
@@ -582,8 +559,8 @@ def _validate_prepare(env: Environment) -> Prepared:
         else date(env.year, 12, 15),
         description="Office supplies, keyed from the supplier's invoice",
         lines=[
-            LineInput("6000" if "parent_account" in kinds else "6700", debit=total),
-            LineInput("2110", credit=credit),
+            LineInput("6000" if "parent_account" in kinds else "6700", total),
+            LineInput("2110", -credit),
         ],
         reason="Keyed from the supplier's invoice",
     )
@@ -640,8 +617,8 @@ def _correct_prepare(env: Environment) -> Prepared:
         entry_date=date.fromisoformat(context["entry_date"]),
         description=context["description"],
         lines=[
-            LineInput(parent.code, debit=Decimal(right["debit"])),
-            LineInput("2110", credit=Decimal(right["debit"]) + Decimal("9.00")),
+            LineInput(parent.code, Decimal(right["amount"])),
+            LineInput("2110", -(Decimal(right["amount"]) + Decimal("9.00"))),
         ],
         accounting_object=bill,
         reason="Keyed from the bill",
